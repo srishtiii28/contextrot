@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Context Rot Detector</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Context Health</h1>
+
+        <div id="status">
+            Ready to analyze
+        </div>
+
+        <button id="analyzeBtn">
+            Analyze Conversation
+        </button>
+
+        <div id="result" class="hidden">
+
+            <div class="score">
+                <span id="score">--</span>
+                <small>/ 100</small>
+            </div>
+
+            <div class="metric">
+                <span>Contradictions</span>
+                <strong id="contradictions">--</strong>
+            </div>
+
+            <div class="metric">
+                <span>Topic Drift</span>
+                <strong id="drift">--</strong>
+            </div>
+
+            <div class="metric">
+                <span>Constraint Violations</span>
+                <strong id="constraints">--</strong>
+            </div>
+
+            <div class="recommendation">
+                <strong>Recommendation</strong>
+                <p id="recommendation">
+                    --
+                </p>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script src="popup.js"></script>
+
+</body>
+</html>
