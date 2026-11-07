@@ -34,4 +34,3 @@ def decode_access_token(credentials: HTTPAuthorizationCredentials | None) -> int
         return int(payload["sub"])
     except (JWTError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from exc
-
