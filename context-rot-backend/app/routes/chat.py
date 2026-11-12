@@ -23,10 +23,10 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
     start = time.perf_counter()
     lock = acquire(session_id)
     try:
-        history, constraints, chunks = await prepare(db, session_id, payload)
+        history, constraints, chunks, in_scope = await prepare(db, session_id, payload)
         diagram_sources = []
-        if chunks:
-            user_text = payload.content or "Please solve the question shown in the attached image."
+        user_text = payload.content or "Please solve the question shown in the attached image."
+        if in_scope and chunks:
             kb_id = session.knowledge_base_id if session else None
             subject_category = normalize_subject_category(session.subject if session else "")
 
@@ -55,6 +55,7 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
                 constraints=constraints,
                 subject=session.subject if session else None,
                 image_data=payload.image_data,
+                in_scope=True,
             )
             answer = inject_fault(answer, payload.demo_fault)
             if diagram:
@@ -64,8 +65,35 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
             from app.services.graph_service import process_message_graphs
             answer = process_message_graphs(answer)
         else:
-            answer = "This question is outside the available course material. Ask about a listed syllabus topic."
-        return persist_answer(db, session_id, payload, answer, history, constraints, chunks, (time.perf_counter() - start) * 1000, diagrams=diagram_sources)
+            # Out of syllabus query: generate general knowledge answer with visual warning banner and suppressed diagrams
+            raw_answer = await generate_response(
+                user_message=user_text,
+                conversation_history=history,
+                retrieved_context=[],
+                constraints=constraints,
+                subject=session.subject if session else None,
+                image_data=payload.image_data,
+                in_scope=False,
+            )
+            warning_banner = (
+                "> ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. "
+                "The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
+            )
+            answer = f"{warning_banner}{raw_answer}"
+            diagram_sources = []
+
+        return persist_answer(
+            db,
+            session_id,
+            payload,
+            answer,
+            history,
+            constraints,
+            chunks if in_scope else [],
+            (time.perf_counter() - start) * 1000,
+            diagrams=diagram_sources,
+            in_scope=in_scope,
+        )
     except (httpx.HTTPError, ValueError) as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail="Generation or retrieval failed; check provider configuration") from exc
@@ -79,7 +107,7 @@ async def stream_message(session_id: int, payload: MessageCreate, db: Session = 
     start = time.perf_counter()
     lock = acquire(session_id)
     try:
-        history, constraints, chunks = await prepare(db, session_id, payload)
+        history, constraints, chunks, in_scope = await prepare(db, session_id, payload)
     except BaseException as exc:
         release(session_id, lock)
         if isinstance(exc, (httpx.HTTPError, ValueError)):
@@ -94,17 +122,34 @@ async def stream_message(session_id: int, payload: MessageCreate, db: Session = 
 
         answer = ""
         try:
-            if not chunks:
-                answer = "This question is outside the available course material. Ask about a listed syllabus topic."
-                yield frame("token", {"text": answer})
+            if not in_scope:
+                warning_banner = (
+                    "> ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. "
+                    "The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
+                )
+                yield frame("token", {"text": warning_banner})
+                answer += warning_banner
+                async for text in generate_tokens(payload.content, history, [], constraints, in_scope=False):
+                    answer += text
+                    yield frame("token", {"text": text})
             elif payload.demo_fault:
                 answer = inject_fault("", payload.demo_fault)
                 yield frame("token", {"text": answer})
             else:
-                async for text in generate_tokens(payload.content, history, chunks, constraints):
+                async for text in generate_tokens(payload.content, history, chunks, constraints, in_scope=True):
                     answer += text
                     yield frame("token", {"text": text})
-            result = persist_answer(db, session_id, payload, answer, history, constraints, chunks, (time.perf_counter() - start) * 1000)
+            result = persist_answer(
+                db,
+                session_id,
+                payload,
+                answer,
+                history,
+                constraints,
+                chunks if in_scope else [],
+                (time.perf_counter() - start) * 1000,
+                in_scope=in_scope,
+            )
             yield frame("saved", ChatResponse(**result).model_dump(mode="json"))
         except Exception:
             db.rollback()

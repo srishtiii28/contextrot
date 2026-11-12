@@ -178,3 +178,26 @@ def test_end_to_end_cymose_after_heart_chat_flow():
         # Diagram image MUST be at the top of the answer
         assert t2_ans.strip().startswith("![Figure 5.8")
 
+        while asyncio.run(process_one()):
+            pass
+
+        # Turn 3: User asks an out-of-syllabus question (engine transmission)
+        time.sleep(1)
+        turn3 = client.post(
+            f"/sessions/{session_id}/messages",
+            json={"content": "how do I repair a broken car engine transmission?"},
+            headers=headers,
+        )
+        assert turn3.status_code == 201
+        t3_json = turn3.json()
+        assert t3_json["assistant_message"]["status"] == "refused"
+        assert t3_json["job_id"] is None
+        assert t3_json["scope_warning"] is not None
+        assert "outside your course syllabus" in t3_json["scope_warning"]
+        # Diagrams are strictly suppressed
+        assert t3_json["diagrams"] == []
+        t3_ans = t3_json["assistant_message"]["content"]
+        assert "> ⚠️ **Out of Syllabus:**" in t3_ans
+        assert "![" not in t3_ans
+        assert any(k in t3_ans.lower() for k in ("engine", "transmission", "mechanical", "diagnostics"))
+

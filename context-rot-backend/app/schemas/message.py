@@ -29,6 +29,7 @@ class MessageResponse(ORMModel):
     correction_of: int | None = None
     generation_ms: float = 0
     image_data: str | None = None
+    scope_warning: str | None = None
 
 
 class AnswerSource(BaseModel):
@@ -50,3 +51,4 @@ class ChatResponse(BaseModel):
     job_id: int | None = None
     sources: list[AnswerSource] = Field(default_factory=list)
     diagrams: list[DiagramSource] = Field(default_factory=list)
+    scope_warning: str | None = None

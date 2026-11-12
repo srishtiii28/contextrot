@@ -165,3 +165,50 @@ def test_submission_lease_expiry(client,account):
     fresh=acquire(sid);release(sid,old)  # A stale owner cannot release the new lease.
     with pytest.raises(HTTPException):acquire(sid)
     release(sid,fresh)
+
+
+def test_out_of_syllabus_visual_warning_and_answer(client, account):
+    sid = session(client, account)
+    resp = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "Explain photosynthesis in detail."},
+    ).json()
+
+    # 1. Status is refused and no background job is queued
+    assert resp["assistant_message"]["status"] == "refused"
+    assert resp["job_id"] is None
+
+    # 2. Scope warning metadata is present on ChatResponse and assistant_message
+    assert resp["scope_warning"] is not None
+    assert "outside your course syllabus" in resp["scope_warning"]
+    assert resp["assistant_message"]["scope_warning"] == resp["scope_warning"]
+
+    # 3. Model generated an answer (not just a refusal stub) with the visual warning banner
+    content = resp["assistant_message"]["content"]
+    assert "> ⚠️ **Out of Syllabus:**" in content
+    assert "Photosynthesis" in content
+
+    # 4. Diagrams are strictly suppressed for out-of-syllabus questions
+    assert resp["diagrams"] == []
+
+    # 5. History persists the scope_warning
+    history = client.get(f"/sessions/{sid}/history", headers=account).json()
+    assert len(history) == 2
+    assert history[1]["scope_warning"] is not None
+    assert "outside your course syllabus" in history[1]["scope_warning"]
+
+
+def test_out_of_syllabus_stream(client, account):
+    sid = session(client, account)
+    r = client.post(
+        f"/sessions/{sid}/messages/stream",
+        headers=account,
+        json={"content": "Explain photosynthesis."},
+    )
+    assert r.status_code == 200
+    assert "event: token" in r.text
+    assert "Out of Syllabus:" in r.text
+    assert "Photosynthesis" in r.text
+    assert "event: saved" in r.text
+    assert "refused" in r.text

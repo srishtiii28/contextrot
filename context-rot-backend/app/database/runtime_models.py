@@ -23,6 +23,7 @@ class MessageState(Base):
     sources: Mapped[list] = mapped_column(JSON, default=list)
     correction_of: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), nullable=True)
     generation_ms: Mapped[float] = mapped_column(Float, default=0)
+    scope_warning: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
 
 class Job(Base):

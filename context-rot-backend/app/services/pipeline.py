@@ -16,6 +16,7 @@ def serialize_message(db, message):
     if detail:
         result.status, result.sources = detail.status, detail.sources
         result.correction_of, result.generation_ms = detail.correction_of, detail.generation_ms
+        result.scope_warning = getattr(detail, "scope_warning", None)
     return result
 
 
@@ -40,7 +41,7 @@ async def prepare(db, session_id, payload):
     session = db.get(StudySession, session_id)
     kb_id = session.knowledge_base_id if session else None
     retrieved = await retrieve(RetrievalRequest(query=retrieval_query, session_id=session_id, knowledge_base_id=kb_id), db=db)
-    return history, constraints, retrieved.chunks
+    return history, constraints, retrieved.chunks, retrieved.in_scope
 
 
 def inject_fault(answer, fault):
@@ -53,14 +54,26 @@ def inject_fault(answer, fault):
     return answer
 
 
-def persist_answer(db, session_id, payload, answer, history, constraints, chunks, elapsed_ms, diagrams=None):
-    in_scope = bool(chunks)
+def persist_answer(db, session_id, payload, answer, history, constraints, chunks, elapsed_ms, diagrams=None, in_scope=None):
+    if in_scope is None:
+        in_scope = bool(chunks)
     user_message = Message(session_id=session_id, role="user", content=payload.content, image_data=payload.image_data)
     assistant = Message(session_id=session_id, role="assistant", content=answer, agent_type="tutor" if in_scope else "scope_filter")
     db.add_all([user_message, assistant])
     db.flush()
     sources = [c.model_dump() for c in chunks]
-    db.add(MessageState(message_id=assistant.id, status="pending" if in_scope else "refused", sources=sources, generation_ms=elapsed_ms))
+    scope_warning = (
+        "⚠️ This question is outside your course syllabus. The following answer is generated from general AI knowledge."
+        if not in_scope
+        else None
+    )
+    db.add(MessageState(
+        message_id=assistant.id,
+        status="pending" if in_scope else "refused",
+        sources=sources,
+        generation_ms=elapsed_ms,
+        scope_warning=scope_warning,
+    ))
     job = None
     if in_scope:
         analysis = AnalysisInput(
@@ -88,4 +101,5 @@ def persist_answer(db, session_id, payload, answer, history, constraints, chunks
         job_id=job.id if job else None,
         sources=formatted_sources,
         diagrams=diagrams or [],
+        scope_warning=scope_warning,
     )

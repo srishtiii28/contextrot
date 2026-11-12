@@ -54,3 +54,6 @@ def create_tables() -> None:
             columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(messages)")}
             if "image_data" not in columns:
                 connection.exec_driver_sql("ALTER TABLE messages ADD COLUMN image_data TEXT")
+            columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(message_states)")}
+            if "scope_warning" not in columns:
+                connection.exec_driver_sql("ALTER TABLE message_states ADD COLUMN scope_warning TEXT")
