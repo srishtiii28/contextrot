@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import Message, StudySession, User
+from app.database.models import Constraint, Message, StudySession, User
 from app.routes.dependencies import current_user
 from app.schemas.message import MessageResponse
 from app.schemas.session import SessionCreate, SessionResponse
@@ -16,6 +16,8 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 def create_session(payload: SessionCreate, db: Session = Depends(get_db), user: User = Depends(current_user)) -> StudySession:
     study_session = StudySession(user_id=user.id, title=payload.title, subject=payload.subject)
     db.add(study_session)
+    db.flush()
+    db.add_all([Constraint(session_id=study_session.id, constraint_type="instruction", content=c[:2000]) for c in payload.constraints if c.strip()])
     db.commit()
     db.refresh(study_session)
     return study_session
@@ -34,5 +36,6 @@ def get_session(session_id: int, db: Session = Depends(get_db), user: User = Dep
 @router.get("/{session_id}/history", response_model=list[MessageResponse])
 def history(session_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> list[Message]:
     owned_session(db, session_id=session_id, user_id=user.id)
-    return list(db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.created_at, Message.id)))
+    from app.services.pipeline import serialize_message
+    return [serialize_message(db, m) for m in db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))]
 

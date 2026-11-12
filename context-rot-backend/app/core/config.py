@@ -12,7 +12,17 @@ class Settings(BaseSettings):
     llm_provider: str = "mock"
     openai_api_key: str | None = None
     google_api_key: str | None = None
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    gemini_model: str = ""
+    model_timeout_seconds: float = 45
+    embedded_worker: bool = True
+    worker_poll_seconds: float = 0.25
+    job_lease_seconds: int = 300
+    recovery_threshold: float = 65
+    enable_demo_faults: bool = True
+    rag_service_url: str | None = None
+    rot_service_url: str | None = None
+    integration_api_key: str | None = None
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5500,http://127.0.0.1:5500,http://localhost:5173,http://127.0.0.1:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -24,4 +34,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

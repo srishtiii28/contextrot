@@ -1,0 +1,9 @@
+**/__pycache__/
+**/.pytest_cache/
+**/.venv/
+**/.env
+**/*.db
+**/*.db-shm
+**/*.db-wal
+tmp/
+**/reports/*.json

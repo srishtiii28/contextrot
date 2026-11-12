@@ -1,0 +1,16 @@
+# Exact directly relevant versions used for local validation; Python 3.11+
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.3
+sqlalchemy==2.0.52
+pydantic==2.13.4
+pydantic-settings==2.15.0
+email-validator==2.3.0
+python-jose==3.5.0
+cryptography==50.0.0
+passlib==1.7.4
+bcrypt==4.3.0
+python-multipart==0.0.32
+httpx==0.28.1
+pytest==8.4.2
+anyio==4.14.2

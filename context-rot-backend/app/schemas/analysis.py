@@ -12,6 +12,19 @@ class AnalysisInput(BaseModel):
     current_answer: str
     conversation_history: list[dict[str, str]] = Field(default_factory=list)
     constraints: list[dict[str, str]] = Field(default_factory=list)
+    retrieved_context: list[dict] = Field(default_factory=list)
+
+
+class DetectorResult(BaseModel):
+    topic_score: float = Field(ge=0, le=1)
+    contradiction_score: float = Field(ge=0, le=1)
+    memory_score: float = Field(ge=0, le=1)
+    scope_score: float = Field(ge=0, le=1)
+    health_score: float = Field(ge=0, le=100)
+    topic_drift: bool
+    contradiction_detected: bool
+    memory_violation: bool
+    alert: str | None = None
 
 
 class AnalysisResponse(ORMModel):

@@ -1,53 +1,63 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+import json
+import time
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-
 from app.database.database import get_db
-from app.database.models import AnalysisResult, Constraint, Message, User
-from app.integrations.rag_client import RetrievalRequest, retrieve
-from app.integrations.rot_client import analyze
+from app.database.models import User
 from app.routes.dependencies import current_user
-from app.schemas.analysis import AnalysisInput
 from app.schemas.message import ChatResponse, MessageCreate
 from app.services.llm_service import generate_response
+from app.services.pipeline import inject_fault, persist_answer, prepare
 from app.services.session_service import owned_session
+from app.services.submission_lock import acquire,release
 
-router = APIRouter(prefix="/sessions", tags=["chat"])
+router=APIRouter(prefix="/sessions",tags=["chat"])
 
 
-@router.post("/{session_id}/messages", response_model=ChatResponse, status_code=status.HTTP_201_CREATED)
-async def send_message(session_id: int, payload: MessageCreate, db: Session = Depends(get_db), user: User = Depends(current_user)) -> ChatResponse:
-    owned_session(db, session_id=session_id, user_id=user.id)
-    user_message = Message(session_id=session_id, role="user", content=payload.content)
-    db.add(user_message)
-    db.flush()
-    history = list(db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.created_at, Message.id)))
+@router.post("/{session_id}/messages",response_model=ChatResponse,status_code=201)
+async def send_message(session_id:int,payload:MessageCreate,db:Session=Depends(get_db),user:User=Depends(current_user)):
+    owned_session(db,session_id=session_id,user_id=user.id)
+    start=time.perf_counter()
+    lock=acquire(session_id)
     try:
-        retrieved = await retrieve(RetrievalRequest(query=payload.content, session_id=session_id))
-        answer = await generate_response(
-            user_message=payload.content,
-            conversation_history=[{"role": item.role, "content": item.content} for item in history],
-            retrieved_context=retrieved.chunks,
-        )
-    except NotImplementedError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    assistant_message = Message(session_id=session_id, role="assistant", content=answer, agent_type="llm")
-    db.add(assistant_message)
-    db.commit()
-    db.refresh(user_message)
-    db.refresh(assistant_message)
+        history,constraints,chunks=await prepare(db,session_id,payload)
+        answer=await generate_response(user_message=payload.content,conversation_history=history,retrieved_context=chunks,constraints=constraints) if chunks else "This question is outside the available course material. Ask about a listed DBMS topic."
+        answer=inject_fault(answer,payload.demo_fault) if chunks else answer
+        return persist_answer(db,session_id,payload,answer,history,constraints,chunks,(time.perf_counter()-start)*1000)
+    except (httpx.HTTPError,ValueError) as exc:
+        db.rollback();raise HTTPException(503,"Generation or retrieval failed; check provider configuration") from exc
+    finally:release(session_id,lock)
 
-    constraints = list(db.scalars(select(Constraint).where(Constraint.session_id == session_id)))
-    analysis_payload = AnalysisInput(
-        session_id=session_id,
-        message_id=assistant_message.id,
-        current_question=payload.content,
-        current_answer=answer,
-        conversation_history=[{"role": item.role, "content": item.content} for item in history],
-        constraints=[{"type": item.constraint_type, "content": item.content} for item in constraints],
-    )
-    analysis = AnalysisResult(session_id=session_id, message_id=assistant_message.id, **(await analyze(analysis_payload)))
-    db.add(analysis)
-    db.commit()
-    return ChatResponse(user_message=user_message, assistant_message=assistant_message)
+
+@router.post("/{session_id}/messages/stream",responses={200:{"content":{"text/event-stream":{}}}})
+async def stream_message(session_id:int,payload:MessageCreate,db:Session=Depends(get_db),user:User=Depends(current_user)):
+    owned_session(db,session_id=session_id,user_id=user.id)
+    start=time.perf_counter()
+    lock=acquire(session_id)
+    try:history,constraints,chunks=await prepare(db,session_id,payload)
+    except BaseException as exc:
+        release(session_id,lock)
+        if isinstance(exc,(httpx.HTTPError,ValueError)):raise HTTPException(503,"Retrieval failed") from exc
+        raise
+    async def stream():
+        from app.services.streaming import generate_tokens
+        def frame(kind,data):return "event: "+kind+"\ndata: "+json.dumps(data)+"\n\n"
+        answer=""
+        try:
+            if not chunks:
+                answer="This question is outside the available course material. Ask about a listed DBMS topic."
+                yield frame("token",{"text":answer})
+            elif payload.demo_fault:
+                answer=inject_fault("",payload.demo_fault);yield frame("token",{"text":answer})
+            else:
+                async for text in generate_tokens(payload.content,history,chunks,constraints):
+                    answer+=text;yield frame("token",{"text":text})
+            result=persist_answer(db,session_id,payload,answer,history,constraints,chunks,(time.perf_counter()-start)*1000)
+            yield frame("saved",ChatResponse(**result).model_dump(mode="json"))
+        except Exception:
+            db.rollback();yield frame("error",{"detail":"Generation failed; partial answer was not saved"})
+        finally:release(session_id,lock)
+    from starlette.background import BackgroundTask
+    return StreamingResponse(stream(),media_type="text/event-stream",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"},background=BackgroundTask(release,session_id,lock))

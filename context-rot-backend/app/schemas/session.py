@@ -8,6 +8,7 @@ from app.schemas.common import ORMModel
 class SessionCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     subject: str | None = Field(default=None, max_length=120)
+    constraints: list[str] = Field(default_factory=list, max_length=20)
 
 
 class SessionResponse(ORMModel):
