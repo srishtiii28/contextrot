@@ -74,6 +74,10 @@ demo_dir = Path(__file__).resolve().parents[2] / "context-rot-frontend"
 if demo_dir.exists():
     app.mount("/demo", StaticFiles(directory=demo_dir, html=True), name="demo")
 
+workspace_dir = Path(__file__).resolve().parents[2] / "context-rot-demo"
+if workspace_dir.exists():
+    app.mount("/workspace", StaticFiles(directory=workspace_dir, html=True), name="workspace")
+
 
 @app.get("/", tags=["system"])
 def root() -> dict[str, str]:
