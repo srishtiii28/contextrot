@@ -239,3 +239,42 @@ def test_out_of_syllabus_sandwich_suppresses_sources_and_diagrams(client, accoun
     assert resp["scope_warning"] is not None
     assert "> ⚠️ **Out of Syllabus:**" in resp["assistant_message"]["content"]
 
+
+def test_pure_continuation_detection():
+    from app.services.rag_service import is_pure_continuation_request
+    assert is_pure_continuation_request("make it a 1 mark answer") is True
+    assert is_pure_continuation_request("elaborate on the above") is True
+    assert is_pure_continuation_request("explain in 2 sentences") is True
+    assert is_pure_continuation_request("can you give an example") is True
+    assert is_pure_continuation_request("how to make sandwich") is False
+    assert is_pure_continuation_request("what about CRISPR gene editing") is False
+    assert is_pure_continuation_request("explain french revolution") is False
+    assert is_pure_continuation_request("cymose inflorescence") is False
+
+
+def test_short_invalid_after_long_valid_query_not_laundered(client, account):
+    sid = session(client, account)
+    # Turn 1: Long valid question
+    r1 = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "Explain the process of photosynthesis in higher plants including the light reactions, cyclic photophosphorylation, and the Calvin cycle."},
+    )
+    assert r1.status_code == 201
+    drain()
+
+    # Turn 2: Short invalid question following the long valid one
+    r2 = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "how to make a sandwich"},
+    ).json()
+
+    # Must be marked refused and out-of-syllabus; Turn 1 cannot validate Turn 2!
+    assert r2["assistant_message"]["status"] == "refused"
+    assert r2["sources"] == []
+    assert r2["diagrams"] == []
+    assert r2["scope_warning"] is not None
+    assert "> ⚠️ **Out of Syllabus:**" in r2["assistant_message"]["content"]
+
+

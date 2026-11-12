@@ -514,6 +514,13 @@ def _retrieval_score(
     topic_overlap = len(topic_terms & _terms(chunk.text))
     if topic_terms and topic_overlap:
         score += 0.75 * (topic_overlap / len(topic_terms))
+    # Definitional boost: If chunk defines or explains the query terms (e.g. "termed as", "is defined", "terminates in", "types of")
+    c_low = chunk.text.lower()
+    if topic_overlap >= 1:
+        if any(sig in c_low for sig in ("termed as", "is defined", "are defined", "is called", "are called", "known as", "refers to", "terminates in", "types of")):
+            score += 0.45
+        if re.search(r"^\s*fig(?:ure)?\.?\s*\d+", c_low) and len(chunk.text.split()) < 35:
+            score -= 0.35
     if is_process_request(query) and topic_overlap:
         score += 0.2 * topic_overlap
         if any(term in _terms(chunk.text) for term in _STUDY_INTENT_TERMS):
@@ -721,30 +728,33 @@ def retrieve_chunks(
         selected_indices.add((chunk.document_id, chunk.chunk_index))
         if len(unique_chunks) == top_k:
             break
-    neighbor_offsets = (-1, 1, 2) if is_process_request(query) else (-1, 1)
-    top_anchor_count = 3 if is_process_request(query) else 2
     final_chunks: list[DocumentChunk] = []
     seen_ids: set[int] = set()
 
-    # Anchor cluster ordering: Keep highest-relevance anchors and their sequential neighbors at the front
+    # 1. Primary priority: all top-ranked matching chunks (anchors) must come FIRST
+    for c in unique_chunks[:top_k]:
+        if c.id not in seen_ids:
+            seen_ids.add(c.id)
+            final_chunks.append(c)
+
+    # 2. Secondary priority: sequential neighbors of the top anchors for local context expansion
+    neighbor_offsets = (-1, 1, 2) if is_process_request(query) else (1, -1)
+    top_anchor_count = 3 if is_process_request(query) else 2
     for anchor in unique_chunks[:top_anchor_count]:
-        cluster = [anchor]
         for offset in neighbor_offsets:
             key = (anchor.document_id, anchor.chunk_index + offset)
             if key in chunk_by_doc_and_idx:
-                cluster.append(chunk_by_doc_and_idx[key])
-        cluster.sort(key=lambda c: c.chunk_index)
-        for c in cluster:
-            if c.id not in seen_ids:
-                seen_ids.add(c.id)
-                final_chunks.append(c)
+                neighbor = chunk_by_doc_and_idx[key]
+                if neighbor.id not in seen_ids:
+                    seen_ids.add(neighbor.id)
+                    final_chunks.append(neighbor)
 
     for c in unique_chunks:
         if c.id not in seen_ids:
             seen_ids.add(c.id)
             final_chunks.append(c)
 
-    max_return_limit = max(top_k + 4, 12) if is_process_request(query) else max(top_k + 2, 8)
+    max_return_limit = max(top_k + 4, 12) if is_process_request(query) else max(top_k + 3, 9)
     return final_chunks[:max_return_limit]
 
 
@@ -1143,31 +1153,51 @@ def check_scope_boundary(
     return len(query_terms & all_chunk_terms) > 0
 
 
+_CONTINUATION_TERMS = {
+    # Marks & numerical counts
+    "mark", "marks", "tier", "point", "points", "bullet", "bullets",
+    "1", "2", "3", "4", "5", "6", "one", "two", "three", "four", "five", "six",
+    # Formatting, length & answer directives
+    "make", "give", "provide", "write", "format", "style", "answer", "answers",
+    "short", "shorter", "long", "longer", "brief", "briefly", "simple", "simpler",
+    "simply", "detailed", "elaborate", "expand", "summarize", "summarise",
+    "summary", "notes", "sentence", "sentences", "word", "words", "paragraph",
+    "paragraphs", "example", "examples", "table", "tabular", "diagram",
+    # Referential pronouns, adverbs & filler words
+    "above", "previous", "earlier", "same", "that", "this", "it", "its", "them",
+    "these", "those", "explain", "explanation", "more", "again", "continue",
+    "next", "why", "how", "what", "is", "are", "the", "of", "to", "in", "for",
+    "on", "a", "an", "and", "or", "can", "you", "please", "tell", "me", "about",
+    "describe", "discuss", "solve", "now", "just", "only", "such", "difference",
+    "differences", "between", "define", "definition",
+}
+
+
+def is_pure_continuation_request(user_message: str) -> bool:
+    """
+    Returns True if the message is purely a formatting, elaboration, or continuation request
+    (e.g., 'make it a 1 mark answer', 'elaborate on the above', 'explain that in 2 sentences')
+    without introducing any new standalone subject nouns or entities.
+    """
+    raw_terms = _terms(user_message)
+    if not raw_terms:
+        return True
+    substantive_new_terms = raw_terms - _CONTINUATION_TERMS
+    return len(substantive_new_terms) == 0
+
+
 def resolve_conversational_query(user_message: str, history: list[dict[str, str]]) -> tuple[str, str]:
     """
     Maintains conversational continuity across turns.
     If the user asks a follow-up without specifying the topic/chapter, resolves it from history.
     Skips any past turns where the question was rejected as out-of-scope.
     """
-    referential_descriptors = {
-        "diagram", "diagrammatic", "representation", "figure", "fig", "image", "picture",
-        "show", "draw", "drawing", "sketch", "tell", "me", "about", "above", "below",
-        "previous", "earlier", "same", "that", "this", "it", "its", "them", "their",
-        "give", "please", "display", "explain", "explanation", "label", "labels",
-        "labelling", "labellings", "part", "parts", "what", "is", "are", "the", "of",
-        "more", "questions", "question", "again", "another", "next", "continue", "few",
-        "make", "tier", "mark", "marks", "point", "points", "bullet", "bullets",
-        "answer", "answers", "format", "style", "short", "long", "brief", "simple",
-        "simpler", "simply", "detailed", "elaborate", "expand", "summarize", "summarise",
-        "summary", "sentence", "sentences", "word", "words", "one", "two", "three",
-        "four", "five", "six", "1", "2", "3", "4", "5", "6",
-    }
     raw_terms = _terms(user_message)
-    substantive_terms = raw_terms - referential_descriptors
+    substantive_terms = raw_terms - _CONTINUATION_TERMS
 
-    # If the user supplied explicit substantive domain keywords (e.g. "cymose", "phyllotaxy", "perigynous"),
-    # this is a direct self-contained query, not a referential follow-up (unless explicitly comparative like "what about...")
-    if substantive_terms and not re.search(r"^\s*(?:what|how)\s+about\b", user_message.lower()):
+    # If the user supplied new substantive domain keywords (e.g. "cymose", "sandwich", "crispr"),
+    # this is a new topic query, NOT a referential follow-up. Keep it strictly standalone!
+    if substantive_terms:
         return user_message, user_message
 
     is_followup = (
@@ -1185,10 +1215,11 @@ def resolve_conversational_query(user_message: str, history: list[dict[str, str]
             # Check if subsequent assistant message was an out-of-scope rejection
             if i + 1 < len(history):
                 next_msg = history[i + 1]
-                if next_msg.get("role") == "assistant" and "beyond the scope" in next_msg.get("content", "").lower():
+                content = next_msg.get("content", "").lower()
+                if "beyond the scope" in content or "> ⚠️ **out of syllabus:**" in content or "outside your prescribed course material" in content:
                     continue
             c = item["content"].strip()
-            is_bare = is_follow_up_request(c) or (len(c.split()) <= 4 and any(t in c.lower() for t in ("above", "diagram", "figure", "more", "solve", "next", "again", "that", "this")))
+            is_bare = is_follow_up_request(c) or is_pure_continuation_request(c)
             if not is_bare:
                 substantive_topics.append(c)
             elif not substantive_topics:

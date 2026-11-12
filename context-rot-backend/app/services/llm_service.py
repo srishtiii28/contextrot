@@ -741,7 +741,7 @@ async def generate_response(
         else:
             category = normalize_subject_category(subject, context_text=user_message)
             system_prompt = _build_subject_system_prompt(category)
-            excerpts_str = "\n\n".join(f"[Source {i+1} Page {c.page}]: {c.text}" for i, c in enumerate(retrieved_context[:6]))
+            excerpts_str = "\n\n".join(f"[Source {i+1} Page {c.page}]: {c.text}" for i, c in enumerate(retrieved_context[:8]))
             user_prompt = f"Excerpts:\n{excerpts_str}\n\nQuestion: {user_message}"
 
         if image_data:
