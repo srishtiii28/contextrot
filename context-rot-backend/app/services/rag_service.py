@@ -44,6 +44,13 @@ _STOPWORDS = {
     "we", "what", "when", "where", "which", "who", "why", "with", "you", "your", "yours",
     "can", "could", "would", "should", "shall", "will", "may", "might", "must", "have", "has",
     "had", "having", "i", "she", "her", "hers", "they", "him", "his",
+    "explain", "explains", "explained", "explaining", "explanation", "describe", "describes",
+    "described", "describing", "description", "define", "defines", "defined", "defining",
+    "definition", "discuss", "discusses", "discussed", "give", "gives", "given", "giving",
+    "show", "shows", "shown", "showing", "state", "states", "stated", "stating",
+    "write", "writes", "written", "writing", "detail", "details", "brief", "briefly",
+    "list", "lists", "outline", "summary", "summarize", "elaborate",
+    "happen", "happens", "happened", "happening", "make", "makes", "made", "best", "good", "better",
 }
 _STUDY_INTENT_TERMS = {
     "step", "stage", "process", "mechanism", "pathway", "function", "role",
@@ -984,7 +991,7 @@ def is_conversational_turn(query: str) -> bool:
 
 
 def _is_out_of_scope_non_academic(query: str) -> bool:
-    """Detects purely everyday non-academic queries (cooking, finance, car repair, etc.)."""
+    """Detects purely everyday non-academic queries (cooking, finance, car repair, non-syllabus history, etc.)."""
     lowered = query.lower()
     patterns = [
         r"\b(?:how\s+to|how\s+do\s+i|how\s+can\s+i|recipe\s+for)\s+(?:bake|cook|make|prepare|brew)\s+(?:a\s+)?(?:cake|chocolate|cookie|bread|pie|pasta|pizza|soup|curry|meal|dish)\b",
@@ -994,6 +1001,7 @@ def _is_out_of_scope_non_academic(query: str) -> bool:
         r"\b(?:how\s+to|how\s+do\s+i|how\s+can\s+i)\s+repair\s+(?:a\s+)?(?:broken\s+)?(?:car|engine|transmission|vehicle|motor|brakes?)\b",
         r"\b(?:repair|fix)\s+(?:a\s+)?(?:broken\s+)?(?:car|engine|transmission|clutch|alternator)\b",
         r"\b(?:french\s+literature|french\s+poetry|movie\s+reviews?|video\s+games?|cheat\s+codes?)\b",
+        r"\b(?:french\s+revolution|russian\s+revolution|american\s+revolution|world\s+war|cold\s+war|medieval\s+history|industrial\s+revolution)\b",
     ]
     return any(re.search(p, lowered) for p in patterns)
 

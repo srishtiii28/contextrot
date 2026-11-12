@@ -61,8 +61,9 @@ def _build_subject_system_prompt(category: str) -> str:
         "If the excerpts do not contain the answer, say that clearly instead of guessing. "
         "For a broad study request, turn the supplied notes into a useful revision guide. "
         "Match the requested answer depth. Format clean Markdown with bold questions, lists, and headings. "
-        "SYLLABUS BOUNDARY RULE: Answer strictly using the provided document excerpts. If the question asks about concepts "
-        "or subjects completely unrelated to the provided document excerpts, respond with: 'The question is beyond the scope of the topics in this chat.' "
+        "SYLLABUS BOUNDARY RULE: When the question is within the scope of the provided document excerpts, answer directly "
+        "and naturally from them. If the user asks about a general concept or subject outside the document excerpts, provide an "
+        "accurate, educational answer using established general knowledge."
         "CONVERSATION CONTINUITY: When the user asks follow-up questions without repeating the chapter or topic, strictly stay on the active topic from prior conversation turns."
     )
 

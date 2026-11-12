@@ -64,6 +64,32 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
                     answer = f"{diagram_md}\n\n{answer}"
             from app.services.graph_service import process_message_graphs
             answer = process_message_graphs(answer)
+
+            # Safety fallback: if LLM output indicates it refused due to scope boundary, convert to open answer with warning
+            refusal_indicators = (
+                "beyond the scope of the topics in this chat",
+                "beyond the scope of the syllabus",
+                "outside the scope of the topics",
+                "outside the available course material",
+            )
+            if any(indicator in answer.lower() for indicator in refusal_indicators):
+                in_scope = False
+                chunks = []
+                diagram_sources = []
+                raw_answer = await generate_response(
+                    user_message=user_text,
+                    conversation_history=history,
+                    retrieved_context=[],
+                    constraints=constraints,
+                    subject=session.subject if session else None,
+                    image_data=payload.image_data,
+                    in_scope=False,
+                )
+                warning_banner = (
+                    "> ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. "
+                    "The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
+                )
+                answer = f"{warning_banner}{raw_answer}"
         else:
             # Out of syllabus query: generate general knowledge answer with visual warning banner and suppressed diagrams
             raw_answer = await generate_response(
