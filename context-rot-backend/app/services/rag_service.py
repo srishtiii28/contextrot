@@ -54,7 +54,7 @@ _STOPWORDS = {
 }
 _STUDY_INTENT_TERMS = {
     "step", "stage", "process", "mechanism", "pathway", "function", "role",
-    "explain", "describe", "working", "cycle", "difference", "compare",
+    "explain", "describe", "working", "work", "works", "cycle", "difference", "compare",
     "solve", "solution", "solutions", "calculate", "calculation", "compute", "computation",
     "find", "evaluate", "evaluation", "derive", "derivation", "formula",
     "formulae", "equation", "equations", "theorem", "lemma", "algorithm", "numerical",
@@ -415,7 +415,36 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=True))
 
 
+def normalize_query_typos(query: str) -> str:
+    typo_patterns = [
+        (r"\bsirculat(ion|ory|e|ing|ed)?\b", r"circulat\1"),
+        (r"\binfloresen(ce|t|ces)?\b", r"inflorescen\1"),
+        (r"\bphotosyntheis\b", "photosynthesis"),
+        (r"\bmitocondri(a|on|al)?\b", r"mitochondri\1"),
+        (r"\brespiraton\b", "respiration"),
+        (r"\bnefron\b", "nephron"),
+        (r"\balviol(i|us)\b", r"alveol\1"),
+    ]
+    norm = query
+    for pat, repl in typo_patterns:
+        norm = re.sub(pat, repl, norm, flags=re.IGNORECASE)
+    return norm
+
+
 def _normalise_term(term: str) -> str:
+    typo_map = {
+        "sirculation": "circulation",
+        "sirculatory": "circulatory",
+        "infloresence": "inflorescence",
+        "photosyntheis": "photosynthesis",
+        "mitocondria": "mitochondria",
+        "mitocondrion": "mitochondrion",
+        "respiraton": "respiration",
+        "nefron": "nephron",
+        "alvioli": "alveoli",
+    }
+    if term in typo_map:
+        term = typo_map[term]
     if len(term) > 5 and term.endswith("ies"):
         return term[:-3] + "y"
     if len(term) > 5 and term.endswith(("ses", "xes", "zes", "ches", "shes")):
@@ -623,6 +652,7 @@ def retrieve_chunks(
     top_k: int,
     knowledge_base_id: int | None = None,
 ) -> list[DocumentChunk]:
+    query = normalize_query_typos(query)
     conditions = [Document.session_id == session_id]
     if knowledge_base_id is not None:
         conditions.append(Document.knowledge_base_id == knowledge_base_id)
@@ -1054,6 +1084,8 @@ def _is_in_scope_math_question(query: str) -> bool:
         return True
     if re.search(r"\b\d*[a-z]\^2\b", lowered):
         return True
+    if re.search(r"\b\d+(?:st|nd|rd|th)\s+term\b", lowered):
+        return True
 
     # 2. Key syllabus topics / formulations
     math_indicators = [
@@ -1062,7 +1094,7 @@ def _is_in_scope_math_question(query: str) -> bool:
         "elimination method", "cross multiplication", "coincident", "intersecting", "parallel lines",
         "consistent", "inconsistent", "infinitely many solutions", "unique solution", "no solution",
         "quadratic equation", "discriminant", "roots of the equation", "nature of roots",
-        "arithmetic progression", "common difference", "first term", "nth term", "sum of first",
+        "ap", "arithmetic progression", "common difference", "first term", "nth term", "sum of first",
         "coordinate geometry", "distance formula", "section formula", "collinear", "vertices of the triangle",
         "area of the triangle", "midpoint formula", "centroid",
         "similar triangles", "pythagoras theorem", "basic proportionality theorem", "thales theorem",
@@ -1127,30 +1159,21 @@ def check_scope_boundary(
             return True
 
     # 4. Standard semantic & lexical overlap for general and biology subjects
-    best_keyword_overlap = max((_keyword_overlap(query, chunk.text) for chunk in retrieved_chunks), default=0)
-    if best_keyword_overlap >= 1:
+    raw_terms = _terms(query)
+    topic_terms = raw_terms - _STUDY_INTENT_TERMS - _CONTINUATION_TERMS
+    if not topic_terms:
         return True
 
-    # Check semantic distance in ChromaDB (cosine distance < 0.82 indicates semantic match)
-    try:
-        col = get_chroma_collection()
-        if col is not None and col.count() > 0:
-            doc_ids = sorted(list({c.document_id for c in retrieved_chunks if c.document_id > 0}))
-            if doc_ids:
-                where_clause = {"document_id": doc_ids[0]} if len(doc_ids) == 1 else {"document_id": {"$in": doc_ids}}
-                res = col.query(query_texts=[query], n_results=1, where=where_clause)
-                if res and res.get("distances") and res["distances"][0]:
-                    dist = res["distances"][0][0]
-                    if dist < 0.82:
-                        return True
-                    if dist > 0.92:
-                        return False
-    except Exception:
-        pass
+    all_chunks_terms = set().union(*(_terms(c.text) for c in retrieved_chunks))
+    if len(topic_terms) <= 2:
+        return topic_terms.issubset(all_chunks_terms)
 
-    query_terms = _terms(query)
-    all_chunk_terms = set().union(*(_terms(c.text) for c in retrieved_chunks))
-    return len(query_terms & all_chunk_terms) > 0
+    matching_terms = topic_terms & all_chunks_terms
+    if len(matching_terms) / len(topic_terms) < 0.6:
+        return False
+
+    best_chunk_topic_overlap = max((len(topic_terms & _terms(c.text)) for c in retrieved_chunks), default=0)
+    return best_chunk_topic_overlap >= 2
 
 
 _CONTINUATION_TERMS = {
@@ -1159,10 +1182,11 @@ _CONTINUATION_TERMS = {
     "1", "2", "3", "4", "5", "6", "one", "two", "three", "four", "five", "six",
     # Formatting, length & answer directives
     "make", "give", "provide", "write", "format", "style", "answer", "answers",
-    "short", "shorter", "long", "longer", "brief", "briefly", "simple", "simpler",
-    "simply", "detailed", "elaborate", "expand", "summarize", "summarise",
-    "summary", "notes", "sentence", "sentences", "word", "words", "paragraph",
-    "paragraphs", "example", "examples", "table", "tabular", "diagram",
+    "question", "questions", "quiz", "test", "practice", "sample", "mcq", "mcqs",
+    "vsa", "sa", "la", "short", "shorter", "long", "longer", "brief", "briefly",
+    "simple", "simpler", "simply", "detailed", "elaborate", "expand", "summarize",
+    "summarise", "summary", "notes", "sentence", "sentences", "word", "words",
+    "paragraph", "paragraphs", "example", "examples", "table", "tabular", "diagram",
     # Referential pronouns, adverbs & filler words
     "above", "previous", "earlier", "same", "that", "this", "it", "its", "them",
     "these", "those", "explain", "explanation", "more", "again", "continue",

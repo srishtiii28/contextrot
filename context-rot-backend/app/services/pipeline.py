@@ -35,9 +35,10 @@ async def prepare(db, session_id, payload):
     session = db.get(StudySession, session_id)
     kb_id = session.knowledge_base_id if session else None
 
-    from app.services.rag_service import is_pure_continuation_request, resolve_conversational_query
+    from app.services.rag_service import is_pure_continuation_request, normalize_query_typos, resolve_conversational_query
 
-    is_continuation = is_pure_continuation_request(payload.content)
+    cleaned_query = normalize_query_typos(payload.content)
+    is_continuation = is_pure_continuation_request(cleaned_query)
     if is_continuation and history:
         prev_in_scope = True
         last_assistant = next((h for h in reversed(history) if h["role"] == "assistant"), None)
@@ -47,13 +48,13 @@ async def prepare(db, session_id, payload):
                 prev_in_scope = False
 
         if prev_in_scope:
-            _, retrieval_query = resolve_conversational_query(payload.content, history)
+            _, retrieval_query = resolve_conversational_query(cleaned_query, history)
             retrieved = await retrieve(RetrievalRequest(query=retrieval_query, session_id=session_id, knowledge_base_id=kb_id), db=db)
             return history, constraints, retrieved.chunks, True
         else:
             return history, constraints, [], False
 
-    retrieved = await retrieve(RetrievalRequest(query=payload.content, session_id=session_id, knowledge_base_id=kb_id), db=db)
+    retrieved = await retrieve(RetrievalRequest(query=cleaned_query, session_id=session_id, knowledge_base_id=kb_id), db=db)
     return history, constraints, retrieved.chunks, retrieved.in_scope
 
 

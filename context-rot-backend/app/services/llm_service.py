@@ -58,15 +58,11 @@ def _build_subject_system_prompt(category: str) -> str:
         "You are an expert, knowledgeable, and conversational study tutor. "
         "Your goal is to help the student learn effectively, understand core concepts, and ace their examinations.\n\n"
         "SYLLABUS GROUNDING & SCOPE GUIDELINE:\n"
-        "1. IN-SYLLABUS TOPICS: If the user's question or active conversation topic is covered in the provided course excerpts, "
-        "ground your explanation directly in those excerpts and synthesize the facts accurately, naturally, and completely.\n"
-        "2. OUT-OF-SYLLABUS TOPICS: If the user's question asks about a topic or concept that is NOT covered in the provided course excerpts "
-        "(this includes questions from other disciplines, as well as advanced or unlisted topics within the same subject such as CRISPR, cloning, optogenetics, etc.):\n"
-        "   - You MUST prepend your response with this exact visual markdown callout on the very first line:\n"
-        "     > ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
-        "   - Then, provide a clear, helpful, accurate, and conversational answer using established general academic knowledge.\n"
-        "   - Do NOT attempt to force the answer into unrelated excerpts, and do NOT refuse or say you cannot answer.\n"
-        "3. CONVERSATIONAL CONTINUITY: When the user asks follow-up questions without repeating the topic (e.g., 'make it a 2 mark answer', 'explain simply', 'give an example', 'summarize'), "
+        "1. IN-SYLLABUS TOPICS: The user's question and active conversation topic are confirmed to be strictly within your prescribed course syllabus. "
+        "Ground your explanation directly in the provided excerpts and syllabus material, synthesizing the facts accurately, naturally, and completely.\n"
+        "2. NO FALSE REFUSALS: Do NOT output any out-of-syllabus warnings, disclaimers, or scope refusal banners for this question.\n"
+        "3. CONVERSATIONAL CONTINUITY: When the user asks follow-up or formatting questions without repeating the topic "
+        "(e.g., 'make it a 2 mark question', 'make it a 2 mark answer', 'explain simply', 'give an example', 'summarize'), "
         "strictly maintain the active topic and context from prior conversation turns without drifting or resetting."
     )
 
@@ -741,7 +737,11 @@ async def generate_response(
         else:
             category = normalize_subject_category(subject, context_text=user_message)
             system_prompt = _build_subject_system_prompt(category)
-            excerpts_str = "\n\n".join(f"[Source {i+1} Page {c.page}]: {c.text}" for i, c in enumerate(retrieved_context[:8]))
+            # Use top 4 chunks trimmed to essential content to preserve strict Groq 8,000 TPM limit
+            excerpts_str = "\n\n".join(
+                f"[Source {i+1} Page {c.page}]: {_clean_chunk_content(c.text)[:650]}"
+                for i, c in enumerate(retrieved_context[:4])
+            )
             user_prompt = f"Excerpts:\n{excerpts_str}\n\nQuestion: {user_message}"
 
         if image_data:
@@ -752,27 +752,44 @@ async def generate_response(
             model_name = "qwen/qwen3.8-27b"
         else:
             user_msg_content = user_prompt
-            model_name = settings.groq_model or "openai/gpt-oss-120b"
+            model_name = settings.groq_model or "qwen/qwen3.8-27b"
 
+        # Keep recent 4 turns within 1,200 chars to avoid TPM exhaustion
+        compact_history = compress_history(conversation_history[-4:], max_chars=1200)
         messages = [
             {"role": "system", "content": system_prompt},
-            *conversation_history[-8:],
+            *compact_history,
             {"role": "user", "content": user_msg_content},
         ]
         request_payload = {
             "model": model_name,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 1200,
+            "max_tokens": 800,
         }
+        max_retries = 3
         async with httpx.AsyncClient(timeout=settings.model_timeout_seconds) as client:
-            resp = await client.post(
-                f"{settings.groq_base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                json=request_payload,
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            return _clean_model_formatting(content)
+            for attempt in range(max_retries):
+                resp = await client.post(
+                    f"{settings.groq_base_url.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    json=request_payload,
+                )
+                if getattr(resp, "status_code", 200) == 429 and attempt < max_retries - 1:
+                    retry_after = getattr(resp, "headers", {}).get("retry-after") if hasattr(resp, "headers") else None
+                    reset_tokens = getattr(resp, "headers", {}).get("x-ratelimit-reset-tokens") if hasattr(resp, "headers") else None
+                    wait_time = 2.0
+                    if retry_after and retry_after.replace(".", "", 1).isdigit():
+                        wait_time = float(retry_after)
+                    elif reset_tokens:
+                        if reset_tokens.endswith("ms"):
+                            wait_time = (float(reset_tokens[:-2]) / 1000.0) + 0.4
+                        elif reset_tokens.endswith("s"):
+                            wait_time = float(reset_tokens[:-1]) + 0.5
+                    await asyncio.sleep(min(max(wait_time, 1.0), 6.0))
+                    continue
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+                return _clean_model_formatting(content)
 
     raise ValueError("Supported LLM_PROVIDER values: offline, mock (offline alias), gemini, groq")
