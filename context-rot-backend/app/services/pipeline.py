@@ -33,11 +33,9 @@ async def prepare(db, session_id, payload):
     history = [dict(role=m.role, content=m.content) for m in db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))]
     constraints = [dict(type=c.constraint_type, content=c.content) for c in db.scalars(select(Constraint).where(Constraint.session_id == session_id))]
     retrieval_query = payload.content
-    # Resolve a short follow-up using the last question; unrelated new questions still face the scope filter.
-    from app.services.course_service import tokens
-    if not tokens(payload.content) or payload.content.lower().strip().startswith(("why is that", "explain that", "give an example", "what about that", "diagram of")):
-        last = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
-        retrieval_query += " " + last
+    # Resolve conversational follow-ups (e.g. 'make it a 2 mark answer', 'explain more', 'why is that') using recent history
+    from app.services.rag_service import resolve_conversational_query
+    _, retrieval_query = resolve_conversational_query(payload.content, history)
     session = db.get(StudySession, session_id)
     kb_id = session.knowledge_base_id if session else None
     retrieved = await retrieve(RetrievalRequest(query=retrieval_query, session_id=session_id, knowledge_base_id=kb_id), db=db)

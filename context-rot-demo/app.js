@@ -959,6 +959,12 @@ function renderAssistantContent(value) {
       }
     }
 
+    if (trimmed.startsWith("> ")) {
+      const quoteText = trimmed.replace(/^>\s*/, "");
+      blocks.push(`<blockquote class="scope-warning-callout">${formatInline(quoteText, mathTokens)}</blockquote>`);
+      continue;
+    }
+
     if (/^(?:[-•]|\d+[.)])\s+/.test(trimmed)) {
       const item = trimmed.replace(/^(?:[-•]|\d+[.)])\s+/, "");
       blocks.push(`<p class="answer-list-item">${formatInline(item, mathTokens)}</p>`);

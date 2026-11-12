@@ -26,6 +26,10 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
         history, constraints, chunks, in_scope = await prepare(db, session_id, payload)
         diagram_sources = []
         user_text = payload.content or "Please solve the question shown in the attached image."
+        warning_banner = (
+            "> ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. "
+            "The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
+        )
         if in_scope and chunks:
             kb_id = session.knowledge_base_id if session else None
             subject_category = normalize_subject_category(session.subject if session else "")
@@ -40,13 +44,6 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
                     knowledge_base_id=kb_id,
                     conversation_history=history,
                 )
-                if diagram:
-                    diagram_sources.append({
-                        "id": diagram.id,
-                        "caption": diagram.caption,
-                        "page": diagram.page,
-                        "url": f"/images/{diagram.id}",
-                    })
 
             answer = await generate_response(
                 user_message=user_text,
@@ -58,38 +55,63 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
                 in_scope=True,
             )
             answer = inject_fault(answer, payload.demo_fault)
-            if diagram:
-                diagram_md = f"![{diagram.caption}](/images/{diagram.id})\n*Figure: {diagram.caption} (Page {diagram.page})*"
-                if f"/images/{diagram.id}" not in answer:
-                    answer = f"{diagram_md}\n\n{answer}"
-            from app.services.graph_service import process_message_graphs
-            answer = process_message_graphs(answer)
 
-            # Safety fallback: if LLM output indicates it refused due to scope boundary, convert to open answer with warning
-            refusal_indicators = (
+            # Check if LLM output indicates the topic is out-of-syllabus or refused due to scope boundary
+            scope_indicators = (
+                "> ⚠️ **out of syllabus:**",
+                "⚠️ **out of syllabus:**",
+                "out of syllabus",
                 "beyond the scope of the topics in this chat",
                 "beyond the scope of the syllabus",
                 "outside the scope of the topics",
                 "outside the available course material",
+                "provided document excerpts do not contain",
+                "provided document excerpts do not provide",
+                "provided excerpts do not contain",
+                "provided excerpts do not mention",
+                "supplied document excerpts do not contain",
+                "not mentioned in the provided excerpts",
+                "not covered in the provided excerpts",
             )
-            if any(indicator in answer.lower() for indicator in refusal_indicators):
+            is_out_of_scope = any(indicator in answer.lower() for indicator in scope_indicators)
+
+            if is_out_of_scope:
                 in_scope = False
                 chunks = []
                 diagram_sources = []
-                raw_answer = await generate_response(
-                    user_message=user_text,
-                    conversation_history=history,
-                    retrieved_context=[],
-                    constraints=constraints,
-                    subject=session.subject if session else None,
-                    image_data=payload.image_data,
-                    in_scope=False,
-                )
-                warning_banner = (
-                    "> ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. "
-                    "The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
-                )
-                answer = f"{warning_banner}{raw_answer}"
+                diagram = None
+                # If answer already contains the warning banner and is an actual explanation (not a short refusal)
+                if "> ⚠️ **out of syllabus:**" in answer.lower():
+                    idx = answer.find("> ⚠️ **Out of Syllabus:**")
+                    if idx != -1:
+                        answer = answer[idx:]
+                else:
+                    raw_answer = await generate_response(
+                        user_message=user_text,
+                        conversation_history=history,
+                        retrieved_context=[],
+                        constraints=constraints,
+                        subject=session.subject if session else None,
+                        image_data=payload.image_data,
+                        in_scope=False,
+                    )
+                    if not raw_answer.strip().startswith("> ⚠️ **Out of Syllabus:**"):
+                        answer = f"{warning_banner}{raw_answer}"
+                    else:
+                        answer = raw_answer
+            else:
+                if diagram:
+                    diagram_sources.append({
+                        "id": diagram.id,
+                        "caption": diagram.caption,
+                        "page": diagram.page,
+                        "url": f"/images/{diagram.id}",
+                    })
+                    diagram_md = f"![{diagram.caption}](/images/{diagram.id})\n*Figure: {diagram.caption} (Page {diagram.page})*"
+                    if f"/images/{diagram.id}" not in answer:
+                        answer = f"{diagram_md}\n\n{answer}"
+                from app.services.graph_service import process_message_graphs
+                answer = process_message_graphs(answer)
         else:
             # Out of syllabus query: generate general knowledge answer with visual warning banner and suppressed diagrams
             raw_answer = await generate_response(
@@ -101,12 +123,12 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
                 image_data=payload.image_data,
                 in_scope=False,
             )
-            warning_banner = (
-                "> ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. "
-                "The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
-            )
-            answer = f"{warning_banner}{raw_answer}"
+            if not raw_answer.strip().startswith("> ⚠️ **Out of Syllabus:**"):
+                answer = f"{warning_banner}{raw_answer}"
+            else:
+                answer = raw_answer
             diagram_sources = []
+            chunks = []
 
         return persist_answer(
             db,

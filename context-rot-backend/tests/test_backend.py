@@ -212,3 +212,30 @@ def test_out_of_syllabus_stream(client, account):
     assert "Photosynthesis" in r.text
     assert "event: saved" in r.text
     assert "refused" in r.text
+
+
+def test_conversational_followup_preserves_topic():
+    from app.services.rag_service import resolve_conversational_query
+    history = [
+        {"role": "user", "content": "Explain photosynthesis in detail."},
+        {"role": "assistant", "content": "Photosynthesis is the process by which green plants convert light energy into chemical energy."},
+    ]
+    _, resolved = resolve_conversational_query("make it a 2 mark answer", history)
+    assert "photosynthesis" in resolved.lower()
+    assert "2 mark" in resolved.lower()
+
+
+def test_out_of_syllabus_sandwich_suppresses_sources_and_diagrams(client, account):
+    sid = session(client, account)
+    resp = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "explain how sandwich is made"},
+    ).json()
+
+    assert resp["assistant_message"]["status"] == "refused"
+    assert resp["sources"] == []
+    assert resp["diagrams"] == []
+    assert resp["scope_warning"] is not None
+    assert "> ⚠️ **Out of Syllabus:**" in resp["assistant_message"]["content"]
+

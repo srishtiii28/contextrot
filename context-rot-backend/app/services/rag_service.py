@@ -994,6 +994,7 @@ def _is_out_of_scope_non_academic(query: str) -> bool:
     """Detects purely everyday non-academic queries (cooking, finance, car repair, non-syllabus history, etc.)."""
     lowered = query.lower()
     patterns = [
+        r"\b(?:sandwich|sandwiches|burger|burgers|pizza|pizzas|recipe|recipes|cook|cooking|bake|baking|cuisine)\b",
         r"\b(?:how\s+to|how\s+do\s+i|how\s+can\s+i|recipe\s+for)\s+(?:bake|cook|make|prepare|brew)\s+(?:a\s+)?(?:cake|chocolate|cookie|bread|pie|pasta|pizza|soup|curry|meal|dish)\b",
         r"\b(?:bake|baking)\s+(?:a\s+)?(?:chocolate\s+)?cake\b",
         r"\b(?:best\s+)?stocks?\s+(?:to\s+buy|to\s+invest|market|picks?|trading|portfolio)\b",
@@ -1155,6 +1156,11 @@ def resolve_conversational_query(user_message: str, history: list[dict[str, str]
         "give", "please", "display", "explain", "explanation", "label", "labels",
         "labelling", "labellings", "part", "parts", "what", "is", "are", "the", "of",
         "more", "questions", "question", "again", "another", "next", "continue", "few",
+        "make", "tier", "mark", "marks", "point", "points", "bullet", "bullets",
+        "answer", "answers", "format", "style", "short", "long", "brief", "simple",
+        "simpler", "simply", "detailed", "elaborate", "expand", "summarize", "summarise",
+        "summary", "sentence", "sentences", "word", "words", "one", "two", "three",
+        "four", "five", "six", "1", "2", "3", "4", "5", "6",
     }
     raw_terms = _terms(user_message)
     substantive_terms = raw_terms - referential_descriptors
@@ -1164,7 +1170,11 @@ def resolve_conversational_query(user_message: str, history: list[dict[str, str]
     if substantive_terms and not re.search(r"^\s*(?:what|how)\s+about\b", user_message.lower()):
         return user_message, user_message
 
-    is_followup = is_follow_up_request(user_message) or len(substantive_terms) == 0
+    is_followup = (
+        is_follow_up_request(user_message)
+        or len(substantive_terms) == 0
+        or bool(re.search(r"\b(?:[1-6]|one|two|three|four|five|six)\s*[- ]?marks?\b", user_message.lower()))
+    )
     if not is_followup:
         return user_message, user_message
 

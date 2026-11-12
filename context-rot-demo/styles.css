@@ -94,6 +94,8 @@ h1, h2, .brand { font-family: "Space Grotesk", sans-serif; }
 .message-bubble .answer-label { margin-bottom: 7px; }
 .message-bubble .answer-label strong { color: var(--green); }
 .message-bubble .answer-label-answer { margin-top: 4px; }
+.message-bubble .scope-warning-callout { margin: 0 0 12px; padding: 10px 14px; border-left: 4px solid #f59e0b; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 13px; line-height: 1.5; white-space: normal; }
+.message-bubble .scope-warning-callout strong { color: #b45309; }
 .message-bubble .answer-list-item { padding-left: 14px; }
 .message-bubble .answer-spacer { height: 6px; }
 .message-bubble .math-display-block { margin: 10px 0; overflow-x: auto; text-align: center; white-space: normal; }
