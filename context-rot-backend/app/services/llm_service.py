@@ -63,7 +63,11 @@ def _build_subject_system_prompt(category: str) -> str:
         "2. NO FALSE REFUSALS: Do NOT output any out-of-syllabus warnings, disclaimers, or scope refusal banners for this question.\n"
         "3. CONVERSATIONAL CONTINUITY: When the user asks follow-up or formatting questions without repeating the topic "
         "(e.g., 'make it a 2 mark question', 'make it a 2 mark answer', 'explain simply', 'give an example', 'summarize'), "
-        "strictly maintain the active topic and context from prior conversation turns without drifting or resetting."
+        "strictly maintain the active topic and context from prior conversation turns without drifting or resetting.\n"
+        "4. TRANSIENT FORMATTING SCOPE: Formatting and length constraints (such as 'make it brief', 'make it short', "
+        "'make it a 2 mark question', 'in 2 sentences', 'give 2 points') apply STRICTLY and EXCLUSIVELY to the specific "
+        "question they followed. When the user introduces a new question or topic, completely reset any transient brevity "
+        "or formatting constraints and answer the new question thoroughly and naturally at its standard academic depth."
     )
 
     if category == "mathematics":
