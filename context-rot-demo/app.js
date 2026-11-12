@@ -41,7 +41,7 @@ async function request(path, options = {}, retries = 1) {
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401) {
+    if (response.status === 401 && path !== "/auth/login") {
       localStorage.removeItem("contextrot_token");
       state.token = null;
       setAuthenticated(false);
