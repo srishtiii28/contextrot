@@ -2,7 +2,7 @@ import time
 from fastapi import HTTPException
 from sqlalchemy import select
 from app.core.config import get_settings
-from app.database.models import Constraint, Message
+from app.database.models import Constraint, Message, StudySession
 from app.database.runtime_models import Event, Job, MessageState
 from app.integrations.rag_client import RetrievalRequest, retrieve
 from app.schemas.analysis import AnalysisInput
@@ -34,10 +34,12 @@ async def prepare(db, session_id, payload):
     retrieval_query = payload.content
     # Resolve a short follow-up using the last question; unrelated new questions still face the scope filter.
     from app.services.course_service import tokens
-    if not tokens(payload.content) or payload.content.lower().strip().startswith(("why is that", "explain that", "give an example", "what about that")):
+    if not tokens(payload.content) or payload.content.lower().strip().startswith(("why is that", "explain that", "give an example", "what about that", "diagram of")):
         last = next((h["content"] for h in reversed(history) if h["role"] == "user"), "")
         retrieval_query += " " + last
-    retrieved = await retrieve(RetrievalRequest(query=retrieval_query, session_id=session_id))
+    session = db.get(StudySession, session_id)
+    kb_id = session.knowledge_base_id if session else None
+    retrieved = await retrieve(RetrievalRequest(query=retrieval_query, session_id=session_id, knowledge_base_id=kb_id), db=db)
     return history, constraints, retrieved.chunks
 
 
@@ -51,19 +53,39 @@ def inject_fault(answer, fault):
     return answer
 
 
-def persist_answer(db, session_id, payload, answer, history, constraints, chunks, elapsed_ms):
+def persist_answer(db, session_id, payload, answer, history, constraints, chunks, elapsed_ms, diagrams=None):
     in_scope = bool(chunks)
-    user_message = Message(session_id=session_id, role="user", content=payload.content)
+    user_message = Message(session_id=session_id, role="user", content=payload.content, image_data=payload.image_data)
     assistant = Message(session_id=session_id, role="assistant", content=answer, agent_type="tutor" if in_scope else "scope_filter")
-    db.add_all([user_message, assistant]); db.flush()
+    db.add_all([user_message, assistant])
+    db.flush()
     sources = [c.model_dump() for c in chunks]
     db.add(MessageState(message_id=assistant.id, status="pending" if in_scope else "refused", sources=sources, generation_ms=elapsed_ms))
     job = None
     if in_scope:
-        analysis = AnalysisInput(session_id=session_id, message_id=assistant.id, current_question=payload.content, current_answer=answer,
-            conversation_history=compress_history(history), constraints=constraints, retrieved_context=sources)
-        job = Job(session_id=session_id, message_id=assistant.id, payload={"analysis": analysis.model_dump(), "persistent_fault": payload.demo_fault == "persistent", "demo_fault": payload.demo_fault})
-        db.add(job); db.flush()
+        analysis = AnalysisInput(
+            session_id=session_id,
+            message_id=assistant.id,
+            current_question=payload.content,
+            current_answer=answer,
+            conversation_history=compress_history(history),
+            constraints=constraints,
+            retrieved_context=sources,
+        )
+        job = Job(
+            session_id=session_id,
+            message_id=assistant.id,
+            payload={"analysis": analysis.model_dump(), "persistent_fault": payload.demo_fault == "persistent", "demo_fault": payload.demo_fault},
+        )
+        db.add(job)
+        db.flush()
     event(db, session_id, "answer.saved", {"message_id": assistant.id, "job_id": job.id if job else None, "demo_fault": payload.demo_fault})
     db.commit()
-    return dict(user_message=serialize_message(db,user_message), assistant_message=serialize_message(db,assistant), job_id=job.id if job else None)
+    formatted_sources = [{"source": c.source, "page": c.page, "score": round(c.score, 4)} for c in chunks]
+    return dict(
+        user_message=serialize_message(db, user_message),
+        assistant_message=serialize_message(db, assistant),
+        job_id=job.id if job else None,
+        sources=formatted_sources,
+        diagrams=diagrams or [],
+    )

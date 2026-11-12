@@ -26,6 +26,22 @@ def seed_course():
         if db.scalar(select(CourseChunk.id).limit(1)) is None:
             db.add_all([CourseChunk(topic=t, text=x, page=i+1, source="Authored DBMS demo notes") for i, (t, x) in enumerate(NOTES)])
             db.commit()
+        # Seed core knowledge bases if not present
+        from app.database.models import KnowledgeBase, User
+        if db.scalar(select(KnowledgeBase.id).limit(1)) is None:
+            system_user = db.scalar(select(User).limit(1))
+            if not system_user:
+                system_user = User(username="system_admin", email="admin@system.local", hashed_password="dummy")
+                db.add(system_user)
+                db.flush()
+            core_kbs = [
+                KnowledgeBase(name="Biology", subject="Biology", owner_id=system_user.id),
+                KnowledgeBase(name="Maths", subject="Mathematics", owner_id=system_user.id),
+                KnowledgeBase(name="Physics", subject="Physics", owner_id=system_user.id),
+                KnowledgeBase(name="Chemistry", subject="Chemistry", owner_id=system_user.id),
+            ]
+            db.add_all(core_kbs)
+            db.commit()
 
 
 def search(query: str, top_k=5):

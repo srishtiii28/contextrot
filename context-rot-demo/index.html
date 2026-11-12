@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <meta name="description" content="A document-grounded AI study workspace." />
+    <title>Context Rot | Study workspace</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css?v=2.4" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Context Rot home">
+          <span class="brand-mark">◒</span>
+          <span>context<span class="brand-accent">rot</span></span>
+        </a>
+        <div class="topbar-actions">
+          <span id="user-badge" class="user-badge hidden"></span>
+          <button id="logout-button" class="button button-ghost hidden">Log out</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="auth-view" class="auth-layout">
+          <div class="auth-copy">
+            <p class="eyebrow">Your focused study companion</p>
+            <h1>Learn from your notes, <em>not the noise.</em></h1>
+            <p class="lead">Upload your course material and get clear, grounded answers with the exact pages that informed them.</p>
+            <div class="proof-row">
+              <span><i>✓</i> Document grounded</span>
+              <span><i>✓</i> Private sessions</span>
+              <span><i>✓</i> Source citations</span>
+            </div>
+          </div>
+          <div class="auth-card card">
+            <div class="auth-tabs">
+              <button class="auth-tab active" data-mode="login">Welcome back</button>
+              <button class="auth-tab" data-mode="signup">Create account</button>
+            </div>
+            <form id="auth-form">
+              <label id="username-label" class="field-label">Username
+                <input id="username" name="username" autocomplete="username" required placeholder="e.g. sam_studies" />
+              </label>
+              <label id="email-field" class="field-label hidden">Email
+                <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" />
+              </label>
+              <label class="field-label">Password
+                <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters" />
+              </label>
+              <button class="button button-primary button-wide" type="submit"><span id="auth-submit-label">Sign in</span><span class="button-arrow">→</span></button>
+              <p id="auth-error" class="form-error hidden"></p>
+            </form>
+          </div>
+        </section>
+
+        <section id="workspace-view" class="workspace hidden">
+          <aside class="sidebar">
+            <div class="sidebar-brand"><span class="brand-mark">◒</span><span>Learn space</span></div>
+            <div class="sidebar-heading">
+              <div><p class="eyebrow">Main menu</p></div>
+            </div>
+            <nav class="side-nav">
+              <button class="nav-item active" data-view="dashboard"><span>⌂</span> Dashboard</button>
+              <button class="nav-item" data-view="ai"><span>✦</span> Learn with AI</button>
+              <button class="nav-item" data-view="sessions"><span>▣</span> My sessions</button>
+              <button class="nav-item" data-view="content"><span>◫</span> Content library</button>
+              <button class="nav-item" data-view="progress"><span>◔</span> My progress</button>
+            </nav>
+            <div class="sidebar-heading session-heading"><div><p class="eyebrow">Recent sessions</p></div><button id="new-session-button" class="icon-button" title="New study session" aria-label="New study session">+</button></div>
+            <div id="session-list" class="session-list"></div>
+            <div class="sidebar-footer">
+              <span class="status-dot"></span>
+              <span>Learning space ready</span>
+            </div>
+          </aside>
+
+          <section class="content">
+            <div id="dashboard-view" class="dashboard-view">
+              <div class="dashboard-hero">
+                <div>
+                  <p class="eyebrow">Monday, keep going</p>
+                  <h1>Good to see you, <span id="dashboard-name">student</span>!</h1>
+                  <p>Build momentum with a focused study session today.</p>
+                </div>
+                <div class="hero-illustration"><span>✦</span><i></i><b></b></div>
+              </div>
+              <div class="stats-grid">
+                <div class="stat-card"><span class="stat-icon green">◷</span><div><strong>12.5 hrs</strong><small>Study time this week</small></div><em>+18%</em></div>
+                <div class="stat-card"><span class="stat-icon orange">✓</span><div><strong>4 sessions</strong><small>Completed this week</small></div><em>On track</em></div>
+                <div class="stat-card"><span class="stat-icon purple">◈</span><div><strong>82%</strong><small>Learning consistency</small></div><em>Great work</em></div>
+              </div>
+              <div class="dashboard-columns">
+                <div class="card ai-card">
+                  <div class="card-kicker"><span>✦</span> AI STUDY LAB</div>
+                  <h2>Learn with your own notes</h2>
+                  <p>Upload a PDF, ask questions, and get explanations grounded in the material you are actually studying.</p>
+                  <button id="dashboard-ai-button" class="button button-primary">Start an AI session <span>→</span></button>
+                  <div class="ai-card-art"><span>?</span><span>✦</span><span>✓</span></div>
+                </div>
+                <div class="card activity-card">
+                  <div class="section-title"><h2>Recent activity</h2><button class="text-button" data-view="sessions">View all</button></div>
+                  <div id="activity-list"></div>
+                </div>
+              </div>
+              <div class="card progress-card">
+                <div><div class="section-title"><h2>Your learning rhythm</h2><span class="muted-label">This week</span></div><p>Consistency beats cramming. Keep your study streak moving.</p></div>
+                <div class="week-bars"><span style="height:42%"><i>Mon</i></span><span style="height:70%"><i>Tue</i></span><span style="height:55%"><i>Wed</i></span><span style="height:88%"><i>Thu</i></span><span style="height:66%"><i>Fri</i></span><span style="height:28%"><i>Sat</i></span><span class="today" style="height:76%"><i>Sun</i></span></div>
+              </div>
+            </div>
+            <div id="empty-state" class="empty-state hidden">
+              <div class="empty-orb">✦</div>
+              <p class="eyebrow">Start a focused session</p>
+              <h1>What are you studying today?</h1>
+              <p>Create a session, upload your notes, and ask your first question.</p>
+              <button id="empty-new-session" class="button button-primary">Create study session <span>→</span></button>
+            </div>
+
+            <div id="session-view" class="session-view hidden">
+              <div class="session-header">
+                <div>
+                  <p id="session-subject" class="eyebrow">Study session</p>
+                  <h1 id="session-title">Untitled session</h1>
+                </div>
+                <div class="session-header-actions">
+                  <label class="button button-secondary upload-doc-btn" title="Upload PDF to this study session">
+                    <span>+ Upload PDF</span>
+                    <input type="file" id="session-file-input" accept=".pdf,application/pdf" hidden />
+                  </label>
+                </div>
+              </div>
+
+              <div id="document-strip" class="document-strip"></div>
+              <div id="chat-messages" class="chat-messages"></div>
+              <div id="image-preview-bar" class="image-preview-bar hidden">
+                <div class="image-preview-thumb-wrapper">
+                  <img id="image-preview-img" src="" alt="Screenshot preview" />
+                  <button type="button" id="remove-image-button" class="remove-image-btn" title="Remove image" aria-label="Remove image">×</button>
+                </div>
+                <div class="image-preview-meta">
+                  <span id="image-preview-name" class="image-preview-name">Attached image</span>
+                  <small class="image-preview-sub">Vision model will solve this diagram/question</small>
+                </div>
+              </div>
+              <form id="chat-form" class="composer">
+                <input type="file" id="image-attachment-input" accept="image/*" hidden />
+                <button type="button" id="attach-image-button" class="attach-button" title="Attach screenshot or diagram (or paste Ctrl+V)" aria-label="Attach image">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                </button>
+                <textarea id="chat-input" rows="1" maxlength="12000" placeholder="Ask anything, or attach a question/diagram screenshot…"></textarea>
+                <button class="send-button" type="submit" aria-label="Send message">↑</button>
+              </form>
+              <p class="composer-hint">Paste screenshots (Ctrl+V) or click 📎 to solve question images. <span>Enter to send · Shift + Enter for new line</span></p>
+            </div>
+            <div id="sessions-view" class="list-view hidden"><div class="page-heading"><p class="eyebrow">Your library</p><h1>My study sessions</h1><button class="button button-primary" id="list-new-session">＋ New session</button></div><div id="all-sessions" class="all-sessions"></div></div>
+            <div id="content-view" class="list-view hidden"><div class="page-heading"><div><p class="eyebrow">Admin content</p><h1>Reference library</h1></div><button class="button button-primary" id="new-library-button">＋ New library</button></div><p class="page-description">Reference materials belong to the platform, not individual students. Create a course library and upload the PDFs that its AI tutor should use.</p><div id="knowledge-base-list" class="library-grid"></div></div>
+            <div id="progress-view" class="progress-view hidden"><div class="page-heading"><p class="eyebrow">Keep growing</p><h1>Your progress</h1></div><div class="card progress-big"><div class="progress-ring">82<span>%</span></div><div><h2>You are building a strong habit.</h2><p>Spend a little time with your notes each day and your understanding compounds. Your AI sessions are helping you stay consistent.</p></div></div></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="session-dialog" class="modal">
+      <form id="session-form" method="dialog">
+        <button type="button" class="modal-close" id="close-dialog" aria-label="Close">×</button>
+        <p class="eyebrow">New session</p>
+        <h2>Set your study focus</h2>
+        <label class="field-label">Session title
+          <input id="session-name" required maxlength="200" placeholder="e.g. Organic chemistry review" />
+        </label>
+        <label class="field-label">Subject <span class="optional">(optional)</span>
+          <input id="session-subject-input" maxlength="120" placeholder="e.g. Chemistry" />
+        </label>
+        <label class="field-label">Reference library
+          <select id="session-library"></select>
+        </label>
+        <p id="session-error" class="form-error hidden"></p>
+        <button class="button button-primary button-wide" type="submit">Create session <span>→</span></button>
+      </form>
+    </dialog>
+    <dialog id="library-dialog" class="modal">
+      <form id="library-form">
+        <button type="button" class="modal-close" id="close-library-dialog" aria-label="Close">×</button>
+        <p class="eyebrow">Content management</p><h2>Create reference library</h2>
+        <label class="field-label">Library name<input id="library-name" required maxlength="200" placeholder="e.g. Class 12 Physics" /></label>
+        <label class="field-label">Subject<input id="library-subject" maxlength="120" placeholder="e.g. Physics" /></label>
+        <p id="library-error" class="form-error hidden"></p>
+        <button class="button button-primary button-wide" type="submit">Create library <span>→</span></button>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status"></div>
+    <script src="app.js?v=2.4"></script>
+  </body>
+</html>

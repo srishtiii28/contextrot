@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.database.models import Constraint, Message, StudySession, User
+from app.database.models import Constraint, KnowledgeBase, Message, StudySession, User
 from app.routes.dependencies import current_user
 from app.schemas.message import MessageResponse
 from app.schemas.session import SessionCreate, SessionResponse
@@ -14,10 +14,26 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 def create_session(payload: SessionCreate, db: Session = Depends(get_db), user: User = Depends(current_user)) -> StudySession:
-    study_session = StudySession(user_id=user.id, title=payload.title, subject=payload.subject)
+    kb = None
+    if payload.knowledge_base_id is not None:
+        kb = db.scalar(select(KnowledgeBase).where(KnowledgeBase.id == payload.knowledge_base_id))
+        if kb is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
+
+    subject = (payload.subject or "").strip()
+    if not subject and kb:
+        subject = (kb.subject or kb.name or "").strip()
+
+    study_session = StudySession(
+        user_id=user.id,
+        title=payload.title,
+        subject=subject or None,
+        knowledge_base_id=payload.knowledge_base_id,
+    )
     db.add(study_session)
     db.flush()
-    db.add_all([Constraint(session_id=study_session.id, constraint_type="instruction", content=c[:2000]) for c in payload.constraints if c.strip()])
+    if payload.constraints:
+        db.add_all([Constraint(session_id=study_session.id, constraint_type="instruction", content=c[:2000]) for c in payload.constraints if c.strip()])
     db.commit()
     db.refresh(study_session)
     return study_session
@@ -34,8 +50,7 @@ def get_session(session_id: int, db: Session = Depends(get_db), user: User = Dep
 
 
 @router.get("/{session_id}/history", response_model=list[MessageResponse])
-def history(session_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> list[Message]:
+def history(session_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)) -> list[MessageResponse]:
     owned_session(db, session_id=session_id, user_id=user.id)
     from app.services.pipeline import serialize_message
     return [serialize_message(db, m) for m in db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))]
-
