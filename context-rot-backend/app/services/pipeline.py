@@ -50,7 +50,16 @@ async def prepare(db, session_id, payload):
         if prev_in_scope:
             _, retrieval_query = resolve_conversational_query(cleaned_query, history)
             retrieved = await retrieve(RetrievalRequest(query=retrieval_query, session_id=session_id, knowledge_base_id=kb_id), db=db)
-            return history, constraints, retrieved.chunks, True
+            chunks = retrieved.chunks
+            if not chunks:
+                substantive_topics = [
+                    h["content"] for h in history if h.get("role") == "user"
+                    and not is_pure_continuation_request(h.get("content", ""))
+                ]
+                if substantive_topics:
+                    fb_retrieved = await retrieve(RetrievalRequest(query=substantive_topics[-1], session_id=session_id, knowledge_base_id=kb_id), db=db)
+                    chunks = fb_retrieved.chunks
+            return history, constraints, chunks, True
         else:
             return history, constraints, [], False
 

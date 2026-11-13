@@ -1216,6 +1216,15 @@ def check_scope_boundary(
     if _is_out_of_scope_non_academic(query):
         return False
 
+    # Extract substantive query if query has a system-generated Follow-up or Context wrapper
+    eval_query = query.split("\nFollow-up:")[0].strip() if "\nFollow-up:" in query else query
+    if "(Context: active topic from earlier query" in eval_query:
+        eval_query = eval_query.split("(Context: active topic from earlier query")[0].strip()
+
+    # If the user's turn itself is a pure formatting/continuation request without new entities, it is in-scope
+    if is_pure_continuation_request(eval_query):
+        return True
+
     # 2. Context detection: determine if the syllabus context is Mathematics
     is_math_context = False
     if subject:
@@ -1237,14 +1246,14 @@ def check_scope_boundary(
     # 3. Mathematics syllabus rules
     if is_math_context:
         # Strictly reject questions requiring methods or formulae beyond Class 10 notes (calculus, university math)
-        if _is_out_of_scope_higher_math(query):
+        if _is_out_of_scope_higher_math(eval_query):
             return False
         # Accept any unseen numerical problem or in-syllabus formulation within Class 10 scope
-        if _is_in_scope_math_question(query):
+        if _is_in_scope_math_question(eval_query):
             return True
 
     # 4. Standard semantic & lexical overlap for general and biology subjects
-    raw_terms = _terms(query)
+    raw_terms = _terms(eval_query)
     topic_terms = raw_terms - _STUDY_INTENT_TERMS - _CONTINUATION_TERMS
     if not topic_terms:
         return True
@@ -1272,6 +1281,9 @@ _CONTINUATION_TERMS = {
     "simple", "simpler", "simply", "detailed", "elaborate", "expand", "summarize",
     "summarise", "summary", "notes", "sentence", "sentences", "word", "words",
     "paragraph", "paragraphs", "example", "examples", "table", "tabular", "diagram",
+    # Conversational meta, continuation & system wrapper tokens
+    "follow", "up", "followup", "context", "active", "topic", "earlier", "query",
+    "substantive", "directive", "direction", "marking", "scheme", "view", "show",
     # Referential pronouns, adverbs & filler words
     "above", "previous", "earlier", "same", "that", "this", "it", "its", "them",
     "these", "those", "explain", "explanation", "more", "again", "continue",

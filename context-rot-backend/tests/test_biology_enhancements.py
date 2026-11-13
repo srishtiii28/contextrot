@@ -201,3 +201,36 @@ def test_end_to_end_cymose_after_heart_chat_flow():
         assert "![" not in t3_ans
         assert any(k in t3_ans.lower() for k in ("engine", "transmission", "mechanical", "diagnostics"))
 
+
+
+def test_conversational_mark_followup_and_new_topic_reset():
+    """Verify follow-up 'make it a 2 mark answer' is in-scope and doesn't bleed into new topics."""
+    import asyncio
+    from app.database.database import SessionLocal
+    from app.schemas.message import MessageCreate
+    from app.services.pipeline import prepare
+    from app.services.rag_service import check_scope_boundary, retrieve_chunks
+    from app.services.llm_service import _filter_transient_formatting_history
+
+    db = SessionLocal()
+    try:
+        # 1. Scope boundary on composite conversational follow-up
+        q_composite = "diagram of neuron\nFollow-up: make it a 2 mark answer"
+        chunks = retrieve_chunks(db, session_id=-999, query=q_composite, top_k=5, knowledge_base_id=1)
+        assert len(chunks) > 0
+        in_scope = check_scope_boundary(q_composite, chunks, has_uploaded_docs=True)
+        assert in_scope is True, "Composite conversational follow-up was incorrectly marked out of scope!"
+
+        # 2. History transient formatting filter
+        history_with_format = [
+            {"role": "user", "content": "diagram of neuron"},
+            {"role": "assistant", "content": "Detailed explanation of a neuron..."},
+            {"role": "user", "content": "make it a 2 mark answer"},
+            {"role": "assistant", "content": "1. Structure: ...\n2. Function: ..."},
+        ]
+        filtered = _filter_transient_formatting_history(history_with_format)
+        assert len(filtered) == 2
+        assert filtered[0]["content"] == "diagram of neuron"
+        assert filtered[1]["content"] == "Detailed explanation of a neuron..."
+    finally:
+        db.close()

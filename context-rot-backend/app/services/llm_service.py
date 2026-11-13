@@ -598,6 +598,27 @@ def _relevant_sentences(query: str, chunks: list[RetrievedChunk], limit: int = 5
 
 
 
+def _filter_transient_formatting_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
+    """
+    When starting a new substantive topic question, removes single-turn formatting directives
+    (e.g., 'make it a 2 mark answer', 'make it brief') and their shortened replies from the prior topic
+    to prevent few-shot brevity or format bleed into the new topic.
+    """
+    from app.services.rag_service import is_pure_continuation_request
+    filtered = []
+    i = 0
+    while i < len(history):
+        msg = history[i]
+        if msg.get("role") == "user" and is_pure_continuation_request(msg.get("content", "")):
+            i += 1
+            if i < len(history) and history[i].get("role") == "assistant":
+                i += 1
+            continue
+        filtered.append(msg)
+        i += 1
+    return filtered
+
+
 async def generate_response(
     *,
     user_message: str,
@@ -739,14 +760,30 @@ async def generate_response(
             )
             user_prompt = f"Question: {user_message}"
         else:
+            from app.services.rag_service import is_pure_continuation_request
+            is_cont = is_pure_continuation_request(user_message)
             category = normalize_subject_category(subject, context_text=user_message)
             system_prompt = _build_subject_system_prompt(category)
+            guidance = _response_guidance(user_message, category)
             # Use top 4 chunks trimmed to essential content to preserve strict Groq 8,000 TPM limit
             excerpts_str = "\n\n".join(
                 f"[Source {i+1} Page {c.page}]: {_clean_chunk_content(c.text)[:650]}"
                 for i, c in enumerate(retrieved_context[:4])
             )
-            user_prompt = f"Excerpts:\n{excerpts_str}\n\nQuestion: {user_message}"
+            if not is_cont:
+                user_prompt = (
+                    f"Excerpts:\n{excerpts_str}\n\n"
+                    f"Task Guidance: {guidance}\n"
+                    "Note: This is a standalone question on a new topic. Provide a comprehensive, full-length academic explanation at standard depth. "
+                    "Do NOT restrict this response to formatting, brevity, or mark limits from previous questions.\n\n"
+                    f"Question: {user_message}"
+                )
+            else:
+                user_prompt = (
+                    f"Excerpts:\n{excerpts_str}\n\n"
+                    f"Task Guidance: {guidance}\n\n"
+                    f"Question: {user_message}"
+                )
 
         if image_data:
             user_msg_content = [
@@ -758,8 +795,14 @@ async def generate_response(
             user_msg_content = user_prompt
             model_name = settings.groq_model or "qwen/qwen3.8-27b"
 
+        # When starting a new topic, filter out transient formatting directives from history to prevent format bleed
+        from app.services.rag_service import is_pure_continuation_request
+        hist_to_use = conversation_history
+        if in_scope and not is_pure_continuation_request(user_message):
+            hist_to_use = _filter_transient_formatting_history(conversation_history)
+
         # Keep recent 4 turns within 1,200 chars to avoid TPM exhaustion
-        compact_history = compress_history(conversation_history[-4:], max_chars=1200)
+        compact_history = compress_history(hist_to_use[-4:], max_chars=1200)
         messages = [
             {"role": "system", "content": system_prompt},
             *compact_history,
