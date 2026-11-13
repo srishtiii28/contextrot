@@ -35,10 +35,10 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
             kb_id = session.knowledge_base_id if session else None
             subject_category = normalize_subject_category(session.subject if session else "")
 
-            diagram = None
+            diagrams = []
             if subject_category != "mathematics":
-                from app.services.rag_service import retrieve_diagram
-                diagram = retrieve_diagram(
+                from app.services.rag_service import retrieve_diagrams
+                diagrams = retrieve_diagrams(
                     db,
                     session_id=session_id,
                     query=user_text,
@@ -60,16 +60,21 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
             # Strip any inadvertent out-of-syllabus warning callout for verified in-scope questions
             answer = re.sub(r"^>\s*⚠️\s*\*\*Out of Syllabus:\*\*.*?\n\n", "", answer, flags=re.DOTALL | re.IGNORECASE).strip()
 
-            if diagram:
-                diagram_sources.append({
-                    "id": diagram.id,
-                    "caption": diagram.caption,
-                    "page": diagram.page,
-                    "url": f"/images/{diagram.id}",
-                })
-                diagram_md = f"![{diagram.caption}](/images/{diagram.id})\n*Figure: {diagram.caption} (Page {diagram.page})*"
-                if f"/images/{diagram.id}" not in answer:
-                    answer = f"{diagram_md}\n\n{answer}"
+            if diagrams:
+                diagram_md_blocks = []
+                for diag in diagrams:
+                    diagram_sources.append({
+                        "id": diag.id,
+                        "caption": diag.caption,
+                        "page": diag.page,
+                        "url": f"/images/{diag.id}",
+                    })
+                    diagram_md = f"![{diag.caption}](/images/{diag.id})\n*Figure: {diag.caption} (Page {diag.page})*"
+                    if f"/images/{diag.id}" not in answer:
+                        diagram_md_blocks.append(diagram_md)
+                if diagram_md_blocks:
+                    joined_diagrams = "\n\n".join(diagram_md_blocks)
+                    answer = f"{joined_diagrams}\n\n{answer}"
             from app.services.graph_service import process_message_graphs
             answer = process_message_graphs(answer)
         else:

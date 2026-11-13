@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.database.database import SessionLocal
 from app.database.models import Document, DocumentImage
-from app.services.rag_service import retrieve_diagram
+from app.services.rag_service import retrieve_diagram, retrieve_diagrams
 
 
 def test_biology_conversational_diagram_retrieval_unit():
@@ -145,3 +145,86 @@ def test_biology_conversational_chat_flow():
 
         # MUST NOT show Adrenal gland or an unrelated diagram
         assert "adrenal" not in t2_ans.lower()
+
+
+def test_biology_multi_diagram_retrieval():
+    """Unit test for multi-part diagrams (Meiosis I & II, Mitosis a&b/c-e, Nephron primary vs counter-current)."""
+    db = SessionLocal()
+    try:
+        # 1. Meiosis general query returns BOTH Meiosis I (Fig 10.3) and Meiosis II (Fig 10.4)
+        diags_meiosis = retrieve_diagrams(db, session_id=-999, query="diagram of meiosis", knowledge_base_id=1)
+        assert len(diags_meiosis) == 2
+        captions = [d.caption for d in diags_meiosis]
+        assert any("10.3" in c or "Meiosis I" in c for c in captions)
+        assert any("10.4" in c or "Meiosis II" in c for c in captions)
+
+        # 2. Stages of meiosis returns both as a unified sequence
+        diags_stages = retrieve_diagrams(db, session_id=-999, query="stages of meiosis diagram", knowledge_base_id=1)
+        assert len(diags_stages) == 2
+
+        # 3. Specific Stage queries: Meiosis 1 vs Meiosis 2
+        diag_m1 = retrieve_diagrams(db, session_id=-999, query="diagram of meiosis 1", knowledge_base_id=1)
+        assert len(diag_m1) == 1
+        assert "10.3" in diag_m1[0].caption
+
+        diag_m2 = retrieve_diagrams(db, session_id=-999, query="diagram of meiosis stage 2", knowledge_base_id=1)
+        assert len(diag_m2) == 1
+        assert "10.4" in diag_m2[0].caption
+
+        # 4. Explicit both stages query: "meiosis stage 1 or 2" / "meiosis 1 and 2"
+        diag_both1 = retrieve_diagrams(db, session_id=-999, query="diagram of meiosis stage 1 or 2", knowledge_base_id=1)
+        assert len(diag_both1) == 2
+
+        diag_both2 = retrieve_diagrams(db, session_id=-999, query="diagram of meiosis 1 and 2", knowledge_base_id=1)
+        assert len(diag_both2) == 2
+
+        # 5. Mitosis general query returns BOTH Fig 10.2 a&b and Fig 10.2 c to e
+        diags_mitosis = retrieve_diagrams(db, session_id=-999, query="diagram of mitosis", knowledge_base_id=1)
+        assert len(diags_mitosis) == 2
+        m_caps = [d.caption for d in diags_mitosis]
+        assert any("10.2 a" in c.lower() for c in m_caps)
+        assert any("10.2 c" in c.lower() for c in m_caps)
+
+        # 6. Specific mitosis stages: Prophase vs Anaphase
+        diag_pro = retrieve_diagrams(db, session_id=-999, query="diagram of prophase in mitosis", knowledge_base_id=1)
+        assert len(diag_pro) == 1
+        assert "10.2 a" in diag_pro[0].caption.lower()
+
+        diag_ana = retrieve_diagrams(db, session_id=-999, query="diagram of anaphase in mitosis", knowledge_base_id=1)
+        assert len(diag_ana) == 1
+        assert "10.2 c" in diag_ana[0].caption.lower()
+
+        # 7. Nephron: Primary diagram (Fig 16.3) vs Counter current mechanism (Fig 16.6)
+        diag_nephron = retrieve_diagrams(db, session_id=-999, query="diagram of nephron", knowledge_base_id=1)
+        assert len(diag_nephron) == 1
+        assert "16.3" in diag_nephron[0].caption
+
+        diag_cc = retrieve_diagrams(db, session_id=-999, query="diagram of counter current mechanism in nephron", knowledge_base_id=1)
+        assert len(diag_cc) == 1
+        assert "16.6" in diag_cc[0].caption
+
+        # 8. Circulation: Double circulation (Fig 15.4)
+        diag_circ = retrieve_diagrams(db, session_id=-999, query="diagram of double circulation", knowledge_base_id=1)
+        assert len(diag_circ) == 1
+        assert "15.4" in diag_circ[0].caption
+
+        # 9. Conversational continuity for meiosis
+        history_meiosis = [
+            {"role": "user", "content": "Explain the stages and significance of meiosis."},
+            {"role": "assistant", "content": "Meiosis is a reductional division occurring in germ cells..."},
+        ]
+        diag_conv_meiosis = retrieve_diagrams(
+            db,
+            session_id=-999,
+            query="diagram of the above",
+            knowledge_base_id=1,
+            conversation_history=history_meiosis,
+        )
+        assert len(diag_conv_meiosis) == 2
+
+        # 10. Backward compatibility with retrieve_diagram returning single DocumentImage | None
+        single_meiosis = retrieve_diagram(db, session_id=-999, query="diagram of meiosis", knowledge_base_id=1)
+        assert single_meiosis is not None
+        assert isinstance(single_meiosis, DocumentImage)
+    finally:
+        db.close()

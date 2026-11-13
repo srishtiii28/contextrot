@@ -788,15 +788,15 @@ def retrieve_chunks(
     return final_chunks[:max_return_limit]
 
 
-def retrieve_diagram(
+def retrieve_diagrams(
     db: Session,
     *,
     session_id: int,
     query: str,
     knowledge_base_id: int | None = None,
     conversation_history: list[dict[str, str]] | None = None,
-) -> DocumentImage | None:
-    """Finds the most relevant diagram or figure using its subtitle/caption as reference."""
+) -> list[DocumentImage]:
+    """Finds all relevant diagrams or figures (supporting multi-figure plates or sequences)."""
     query_lower = query.lower()
     is_diagram_request = any(
         term in query_lower
@@ -804,19 +804,19 @@ def retrieve_diagram(
             "diagram", "figure", "fig", "flowchart", "image", "picture", "illustration",
             "draw", "sketch", "structure of", "pathway of", "cycle of", "show me",
             "chart", "schematic", "labelling", "labels", "construction",
-            "show graph", "display graph",
+            "show graph", "display graph", "stages of", "stages in", "phases of",
         )
     )
     # Also trigger when a specific textbook example, figure, or geometric problem is requested
     if not is_diagram_request:
         is_diagram_request = bool(
             re.search(
-                r"\b(?:example\s*\d+|fig(?:ure)?\.?\s*\d+(?:\.\d+)?|tangents?|concentric|circles?|triangles?|ladder|shadow|ogive|romila|akhila|champa|rails?|railway|pencils?|erasers?)\b",
+                r"\b(?:example\s*\d+|fig(?:ure)?\.?\s*\d+(?:\.\d+)?|tangents?|concentric|circles?|triangles?|ladder|shadow|ogive|romila|akhila|champa|rails?|railway|pencils?|erasers?|(?:stages?|phases?)\s+of\s+(?:meiosis|mitosis|cell\s+division)|meiosis\s+stages?|mitosis\s+stages?)\b",
                 query_lower,
             )
         )
     if not is_diagram_request:
-        return None
+        return []
 
     if knowledge_base_id is not None:
         conditions = [Document.knowledge_base_id == knowledge_base_id]
@@ -831,7 +831,14 @@ def retrieve_diagram(
         )
     )
     if not images:
-        return None
+        return []
+
+    # Effective query incorporates resolved conversational topic when available
+    effective_query = query_lower
+    if conversation_history:
+        _, resolved_topic = resolve_conversational_query(query, conversation_history)
+        if resolved_topic and resolved_topic.lower() != query_lower:
+            effective_query = f"{query_lower} {resolved_topic.lower()}"
 
     # Check for direct figure number match or known textbook example/problem figure targets
     target_num = None
@@ -868,11 +875,69 @@ def retrieve_diagram(
         target_num = "6.10"
 
     if target_num:
+        matched = []
         for img in images:
             if re.search(rf"\bfig(?:ure)?\.?\s*{re.escape(target_num)}\b", img.caption.lower()):
-                return img
+                matched.append(img)
+        if matched:
+            return matched
         if fig_num_match:
-            return None
+            return []
+
+    # 1. Targeted matcher for Meiosis: Figures 10.3 (Meiosis I) and 10.4 (Meiosis II)
+    if "meiosis" in effective_query:
+        has_both_indicator = bool(re.search(r"\b(?:1\s*(?:and|or|to|\&)\s*2|i\s*(?:and|or|to|\&)\s*ii)\b", effective_query))
+        is_meiosis_2 = bool(re.search(r"\b(?:meiosis\s*(?:2|ii|two)|stage\s*2|second\s+meiotic|part\s*2)\b", effective_query))
+        is_meiosis_1 = bool(re.search(r"\b(?:meiosis\s*(?:1|i|one)|stage\s*1|first\s+meiotic|part\s*1)\b", effective_query))
+
+        m1 = next((img for img in images if re.search(r"\b10\.3\b", img.caption) or "stages of meiosis i" in img.caption.lower()), None)
+        m2 = next((img for img in images if re.search(r"\b10\.4\b", img.caption) or "stages of meiosis ii" in img.caption.lower()), None)
+
+        if m1 or m2:
+            if has_both_indicator or (is_meiosis_1 and is_meiosis_2) or (not is_meiosis_1 and not is_meiosis_2):
+                multi_res = [img for img in [m1, m2] if img is not None]
+                if multi_res:
+                    return multi_res
+            elif is_meiosis_2 and m2:
+                return [m2]
+            elif is_meiosis_1 and m1:
+                return [m1]
+
+    # 2. Targeted matcher for Mitosis: Figures 10.2 a&b and 10.2 c to e
+    if "mitosis" in effective_query:
+        is_pro_meta = bool(re.search(r"\b(?:prophase|metaphase|early\s+prophase|late\s+prophase)\b", effective_query))
+        is_ana_telo = bool(re.search(r"\b(?:anaphase|telophase|cytokinesis)\b", effective_query))
+
+        m_ab = next((img for img in images if "10.2 a" in img.caption.lower()), None)
+        m_ce = next((img for img in images if "10.2 c" in img.caption.lower()), None)
+
+        if m_ab or m_ce:
+            if is_pro_meta and not is_ana_telo:
+                if m_ab:
+                    return [m_ab]
+            elif is_ana_telo and not is_pro_meta:
+                if m_ce:
+                    return [m_ce]
+            else:
+                multi_res = [img for img in [m_ab, m_ce] if img is not None]
+                if multi_res:
+                    return multi_res
+
+    # 3. Targeted matcher for Nephron: Primary (Fig 16.3) vs Counter Current (Fig 16.6)
+    if "nephron" in effective_query:
+        if any(k in effective_query for k in ("counter current", "vasa recta", "hairpin", "medullary gradient")):
+            cc = next((img for img in images if "16.6" in img.caption or "counter current" in img.caption.lower()), None)
+            if cc:
+                return [cc]
+        prim = next((img for img in images if "16.3" in img.caption or "blood vessels, duct and tubule" in img.caption.lower()), None)
+        if prim:
+            return [prim]
+
+    # 4. Targeted matcher for Circulation: Fig 15.4
+    if any(k in effective_query for k in ("double circulation", "blood circulation", "plan of circulation", "circulation in human")):
+        circ = next((img for img in images if "15.4" in img.caption or "schematic plan of blood circulation" in img.caption.lower()), None)
+        if circ:
+            return [circ]
 
     diagram_descriptor_terms = {
         "diagram", "diagrammatic", "diagrammatical", "representation", "presentation", "presented",
@@ -908,6 +973,7 @@ def retrieve_diagram(
         "nephron": {"nephron", "kidney", "renal"},
         "alveolus": {"alveolus", "alveoli", "lung", "respiratory"},
         "mitosis": {"mitosis", "cell", "division"},
+        "meiosis": {"meiosis", "meiotic", "cell", "division"},
         "bacterium": {"bacterium", "bacteria"},
         "bacteria": {"bacterium", "bacteria"},
         "stem": {"stem", "stems", "cauline"},
@@ -969,7 +1035,7 @@ def retrieve_diagram(
                 expanded_query_terms.update(synonym_map.get(term, set()))
 
     if not query_subject_terms:
-        return None
+        return []
 
     clean_topic_tokens = [t for t in query_lower.split() if t not in diagram_descriptor_terms and t not in _STOPWORDS]
     topic_phrase = " ".join(clean_topic_tokens).strip()
@@ -1014,9 +1080,28 @@ def retrieve_diagram(
 
     # Strictly require positive subject overlap to avoid matching unrelated figures
     if best_overlap > 0:
-        return best_image
+        return [best_image]
 
-    return None
+    return []
+
+
+def retrieve_diagram(
+    db: Session,
+    *,
+    session_id: int,
+    query: str,
+    knowledge_base_id: int | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> DocumentImage | None:
+    """Finds the single most relevant diagram or figure. Preserved for backward compatibility."""
+    results = retrieve_diagrams(
+        db,
+        session_id=session_id,
+        query=query,
+        knowledge_base_id=knowledge_base_id,
+        conversation_history=conversation_history,
+    )
+    return results[0] if results else None
 
 
 def is_conversational_turn(query: str) -> bool:

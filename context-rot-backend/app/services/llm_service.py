@@ -255,7 +255,7 @@ def _response_guidance(query: str, subject_category: str = "general") -> str:
     if subject_category == "biology" or re.search(r"\b(diagram|figure|flowchart|draw|sketch|structure|anatomy|t.s.|transverse section|label|labellings?|labels?)\b", lowered):
         return (
             "Explain the biological structure or physiological process in detail. If an uploaded textbook diagram is displayed or available, refer directly to it and provide a comprehensive explanation of all its labelled parts, anatomical layers, and functions based on the uploaded notes. "
-            "For multi-part compound diagrams (such as Dicot and Monocot stem/root/leaf), explain both parts thoroughly and highlight their key anatomical differences. Do not generate ASCII art or text sketches. If no diagram for the topic exists in the notes, explicitly state that the requested diagram is not available in the uploaded notes."
+            "For multi-part diagrams (such as Dicot and Monocot stem/root/leaf) or sequential stage figures (such as Meiosis I & Meiosis II or stages of Mitosis), explain all displayed figures and stages sequentially, describing every key phase (e.g. Prophase, Metaphase, Anaphase, Telophase) and labelling visible in the figures. Do not generate ASCII art or text sketches. If no diagram for the topic exists in the notes, explicitly state that the requested diagram is not available in the uploaded notes."
         )
 
     if subject_category == "physics":
