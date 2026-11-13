@@ -5,4 +5,5 @@ __pycache__/
 .env
 context_rot.db
 *.sqlite3
+chroma_store/
 

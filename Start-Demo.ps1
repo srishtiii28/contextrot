@@ -3,6 +3,12 @@ $ErrorActionPreference='Stop'
 $backendPath=Join-Path $PSScriptRoot 'context-rot-backend'
 $pythonPath=Join-Path $backendPath '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $pythonPath)) {
+    $parentPython=Join-Path (Split-Path $PSScriptRoot -Parent) '.venv\Scripts\python.exe'
+    if (Test-Path -LiteralPath $parentPython) {
+        $pythonPath=$parentPython
+    }
+}
+if (-not (Test-Path -LiteralPath $pythonPath)) {
     $bootstrap=Get-Command python -ErrorAction SilentlyContinue
     if ($bootstrap) { & $bootstrap.Source -m venv (Join-Path $backendPath '.venv') }
     else {

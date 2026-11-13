@@ -17,7 +17,30 @@ No `.env` is needed for offline mode (`mock` is retained as an alias for offline
 - Demo: http://127.0.0.1:8000/demo/lab.html
 - API documentation: http://127.0.0.1:8000/docs
 - Capability disclosure: http://127.0.0.1:8000/system/capabilities
-- Earlier preserved client: http://127.0.0.1:8000/demo/
+- Preserved tutor demo client: http://127.0.0.1:8000/demo/
+
+## RAG & Knowledge Retrieval Slice
+
+The backend supports the complete prototype flow:
+
+1. Create an account and a reference library (`POST /knowledge-bases`).
+2. Upload course PDFs to `POST /knowledge-bases/{id}/documents`.
+3. Create a study session linked to that library.
+4. Send a question to `POST /sessions/{session_id}/messages`.
+5. The response includes the grounded answer and the retrieved source pages in `sources`.
+
+Documents are extracted with `pypdf`, split into overlapping chunks, embedded locally, and stored in SQLite / ChromaDB. Retrieval is session-scoped, so one study session cannot use another session's documents.
+
+## Key endpoints
+
+- `POST /auth/signup`, `POST /auth/login`, `GET /users/me`
+- `POST /sessions`, `GET /sessions`, `GET /sessions/{id}`, `GET /sessions/{id}/history`
+- `POST /sessions/{id}/messages`, `POST /sessions/{id}/messages/stream`
+- `GET /sessions/{id}/health`, `GET /sessions/{id}/analysis`
+- `POST /integrations/rag/retrieve`, `POST /integrations/rot/analyze` (team integration contracts)
+- `POST /integrations/sessions/{id}/documents`, `GET /integrations/sessions/{id}/documents`
+- `POST /knowledge-bases`, `GET /knowledge-bases`
+- `POST /knowledge-bases/{id}/documents`, `GET /knowledge-bases/{id}/documents`
 
 ## Run checks
 
@@ -28,7 +51,7 @@ No `.env` is needed for offline mode (`mock` is retained as an alias for offline
 .\.venv\Scripts\python.exe scripts/load_test.py --concurrency 20 --rounds 3
 ```
 
-Generated reports go into `reports/`. The demo-check script creates an isolated demo account, exercises the examiner path, saves non-secret evidence and revokes its temporary API key. Load testing creates test sessions and records first-content and completion timing separately. No test claims detector F1 or vector retrieval quality.
+Generated reports go into `reports/`. The demo-check script creates an isolated demo account, exercises the examiner path, saves non-secret evidence and revokes its temporary API key. Load testing creates test sessions and records first-content and completion timing separately.
 
 ## Separate worker
 
@@ -37,8 +60,6 @@ Default: one database-polled worker runs within the API process, so the demo nee
 ```powershell
 .\.venv\Scripts\python.exe -m app.services.worker
 ```
-
-Use the same working directory, database and provider settings for API and worker. Jobs are persistent; expired leases can be reclaimed. Do not use Uvicorn `--reload` for load-test measurements. SQLite is the supported local demonstration database; PostgreSQL migration and distributed hardening remain future work.
 
 ## Gemini provider
 
@@ -51,16 +72,6 @@ GEMINI_MODEL=an-exact-model-id-enabled-in-your-account
 ENABLE_DEMO_FAULTS=false
 ```
 
-Model IDs are intentionally not hardcoded because account availability changes. Non-streaming requests use `generateContent`; streaming requests use `streamGenerateContent?alt=sse`. Implementation follows [Google's generation API](https://ai.google.dev/api/generate-content). Provider integration is contract-tested with mocked HTTP; a real paid call requires your credentials and has not been performed. Offline mode makes no model-network requests.
-
 ## Teammate modules
 
-Configure full endpoint URLs in `RAG_SERVICE_URL` and `ROT_SERVICE_URL`; optional shared service credentials use `INTEGRATION_API_KEY`. Do not point these URLs at this API's own integration routes. See [contracts](../docs/INTEGRATION_CONTRACTS.md).
-
-The default local corpus is authored DBMS material with lexical matching, and the checker is a narrow rule baseline. They make the backend independently demonstrable; substitute the team's approved course index and validated detector before claiming final research results.
-
-## Data and security
-
-Existing domain tables remain intact; new runtime tables are additive. Back up the SQLite database before manual data changes. User passwords use PBKDF2; legacy bcrypt hashes can still be verified. JWTs expire; API keys can be revoked. Set a private random JWT secret for shared deployments and bind publicly only after agreeing the deployment scope. The launcher binds loopback by default.
-
-Root documentation contains the [demo guide](../docs/DEMO_GUIDE.md), [personal implementation checklist](../docs/ARIJIT_SEMESTER_7.md), [measurements](../docs/VALIDATION.md) and [eighth-semester plan](../docs/SEMESTER_8_PLAN.md).
+Configure full endpoint URLs in `RAG_SERVICE_URL` and `ROT_SERVICE_URL`; optional shared service credentials use `INTEGRATION_API_KEY`. See [contracts](../docs/INTEGRATION_CONTRACTS.md).

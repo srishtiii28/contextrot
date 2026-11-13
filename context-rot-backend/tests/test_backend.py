@@ -165,3 +165,116 @@ def test_submission_lease_expiry(client,account):
     fresh=acquire(sid);release(sid,old)  # A stale owner cannot release the new lease.
     with pytest.raises(HTTPException):acquire(sid)
     release(sid,fresh)
+
+
+def test_out_of_syllabus_visual_warning_and_answer(client, account):
+    sid = session(client, account)
+    resp = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "Explain photosynthesis in detail."},
+    ).json()
+
+    # 1. Status is refused and no background job is queued
+    assert resp["assistant_message"]["status"] == "refused"
+    assert resp["job_id"] is None
+
+    # 2. Scope warning metadata is present on ChatResponse and assistant_message
+    assert resp["scope_warning"] is not None
+    assert "outside your course syllabus" in resp["scope_warning"]
+    assert resp["assistant_message"]["scope_warning"] == resp["scope_warning"]
+
+    # 3. Model generated an answer (not just a refusal stub) with the visual warning banner
+    content = resp["assistant_message"]["content"]
+    assert "> ⚠️ **Out of Syllabus:**" in content
+    assert "Photosynthesis" in content
+
+    # 4. Diagrams are strictly suppressed for out-of-syllabus questions
+    assert resp["diagrams"] == []
+
+    # 5. History persists the scope_warning
+    history = client.get(f"/sessions/{sid}/history", headers=account).json()
+    assert len(history) == 2
+    assert history[1]["scope_warning"] is not None
+    assert "outside your course syllabus" in history[1]["scope_warning"]
+
+
+def test_out_of_syllabus_stream(client, account):
+    sid = session(client, account)
+    r = client.post(
+        f"/sessions/{sid}/messages/stream",
+        headers=account,
+        json={"content": "Explain photosynthesis."},
+    )
+    assert r.status_code == 200
+    assert "event: token" in r.text
+    assert "Out of Syllabus:" in r.text
+    assert "Photosynthesis" in r.text
+    assert "event: saved" in r.text
+    assert "refused" in r.text
+
+
+def test_conversational_followup_preserves_topic():
+    from app.services.rag_service import resolve_conversational_query
+    history = [
+        {"role": "user", "content": "Explain photosynthesis in detail."},
+        {"role": "assistant", "content": "Photosynthesis is the process by which green plants convert light energy into chemical energy."},
+    ]
+    _, resolved = resolve_conversational_query("make it a 2 mark answer", history)
+    assert "photosynthesis" in resolved.lower()
+    assert "2 mark" in resolved.lower()
+
+
+def test_out_of_syllabus_sandwich_suppresses_sources_and_diagrams(client, account):
+    sid = session(client, account)
+    resp = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "explain how sandwich is made"},
+    ).json()
+
+    assert resp["assistant_message"]["status"] == "refused"
+    assert resp["sources"] == []
+    assert resp["diagrams"] == []
+    assert resp["scope_warning"] is not None
+    assert "> ⚠️ **Out of Syllabus:**" in resp["assistant_message"]["content"]
+
+
+def test_pure_continuation_detection():
+    from app.services.rag_service import is_pure_continuation_request
+    assert is_pure_continuation_request("make it a 1 mark answer") is True
+    assert is_pure_continuation_request("elaborate on the above") is True
+    assert is_pure_continuation_request("explain in 2 sentences") is True
+    assert is_pure_continuation_request("can you give an example") is True
+    assert is_pure_continuation_request("how to make sandwich") is False
+    assert is_pure_continuation_request("what about CRISPR gene editing") is False
+    assert is_pure_continuation_request("explain french revolution") is False
+    assert is_pure_continuation_request("cymose inflorescence") is False
+
+
+def test_short_invalid_after_long_valid_query_not_laundered(client, account):
+    sid = session(client, account)
+    # Turn 1: Long valid question
+    r1 = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "Explain the process of photosynthesis in higher plants including the light reactions, cyclic photophosphorylation, and the Calvin cycle."},
+    )
+    assert r1.status_code == 201
+    drain()
+
+    # Turn 2: Short invalid question following the long valid one
+    r2 = client.post(
+        f"/sessions/{sid}/messages",
+        headers=account,
+        json={"content": "how to make a sandwich"},
+    ).json()
+
+    # Must be marked refused and out-of-syllabus; Turn 1 cannot validate Turn 2!
+    assert r2["assistant_message"]["status"] == "refused"
+    assert r2["sources"] == []
+    assert r2["diagrams"] == []
+    assert r2["scope_warning"] is not None
+    assert "> ⚠️ **Out of Syllabus:**" in r2["assistant_message"]["content"]
+
+
