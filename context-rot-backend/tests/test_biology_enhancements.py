@@ -234,3 +234,87 @@ def test_conversational_mark_followup_and_new_topic_reset():
         assert filtered[1]["content"] == "Detailed explanation of a neuron..."
     finally:
         db.close()
+
+
+def test_followup_answering_listed_questions_resolution_and_chunks():
+    """Verify conversational follow-ups like 'answer each of the above questions as well' resolve to active topic."""
+    from app.services.rag_service import (
+        is_follow_up_request,
+        is_pure_continuation_request,
+        resolve_conversational_query,
+        retrieve_chunks,
+        check_scope_boundary,
+    )
+    from app.services.llm_service import compress_history, _response_guidance
+
+    # 1. Detection tests
+    queries = [
+        "answer each of the above questions as well",
+        "answer all of the above questions",
+        "solve each of them",
+        "solve them as well",
+        "provide the answers to these questions",
+        "give answers to the above",
+        "answer question 2",
+        "solve question 4",
+        "what is the answer to question 5",
+        "answer the first one",
+        "solve each one",
+    ]
+    for q in queries:
+        assert is_follow_up_request(q) is True, f"{q} failed is_follow_up_request!"
+        assert is_pure_continuation_request(q) is True, f"{q} failed is_pure_continuation_request!"
+
+    # 2. Resolution tests
+    history = [
+        {"role": "user", "content": "give me 10 important questions from cell cycle and cell division"},
+        {
+            "role": "assistant",
+            "content": (
+                "Here are 10 important questions based on the cell cycle and cell division:\n"
+                "1. Why is mitosis called equational division?\n"
+                "2. Identify the stage of the cell cycle for chromosome alignment.\n"
+                "3. Explain the stages of prophase I in meiosis.\n"
+                "4. What is the significance of crossing over?\n"
+                "5. Describe cytokinesis in plant vs animal cells.\n"
+                "6. What is the G0 quiescent stage?\n"
+                "7. What are kinetochores and their role?\n"
+                "8. Differentiate between metaphase I and metaphase II.\n"
+                "9. What is synaptonemal complex?\n"
+                "10. Explain interkinesis."
+            ),
+        },
+    ]
+
+    followup_q = "answer each of the above questions as well"
+    resolved_msg, retrieval_q = resolve_conversational_query(followup_q, history)
+    assert "cell cycle and cell division" in retrieval_q.lower()
+    assert "cell cycle and cell division" in resolved_msg.lower()
+
+    # 3. Retrieval test: chunks must be Cell Cycle / Meiosis / Mitosis, NOT Respiration or Heart
+    db = SessionLocal()
+    try:
+        chunks = retrieve_chunks(db, session_id=-999, query=retrieval_q, top_k=5, knowledge_base_id=1)
+        assert len(chunks) > 0
+        in_scope = check_scope_boundary(retrieval_q, chunks, has_uploaded_docs=True)
+        assert in_scope is True
+        chunk_texts = " ".join(c.text.lower() for c in chunks)
+        assert any(k in chunk_texts for k in ("cell cycle", "mitosis", "meiosis", "prophase", "division"))
+        assert "cardiac cycle" not in chunk_texts[:500]
+
+        # 4. Guidance test
+        guidance = _response_guidance(followup_q, "biology")
+        assert "each of the specific questions" in guidance
+        assert "numbered format" in guidance
+
+        single_q_guidance = _response_guidance("answer question 2", "biology")
+        assert "specifically for question 2" in single_q_guidance
+
+        # 5. History compression test: full 10-question turn must not be truncated
+        compact = compress_history(history, max_chars=3000)
+        assert len(compact) == 2
+        assert "give me 10 important questions" in compact[0]["content"]
+        assert "10. Explain interkinesis." in compact[1]["content"]
+    finally:
+        db.close()
+

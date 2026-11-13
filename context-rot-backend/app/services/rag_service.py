@@ -44,6 +44,8 @@ _STOPWORDS = {
     "we", "what", "when", "where", "which", "who", "why", "with", "you", "your", "yours",
     "can", "could", "would", "should", "shall", "will", "may", "might", "must", "have", "has",
     "had", "having", "i", "she", "her", "hers", "they", "him", "his",
+    "each", "every", "both", "either", "neither", "well", "also", "too", "together", "respectively",
+    "properly", "correctly", "completely", "thoroughly", "even", "actually", "already", "still",
     "explain", "explains", "explained", "explaining", "explanation", "describe", "describes",
     "described", "describing", "description", "define", "defines", "defined", "defining",
     "definition", "discuss", "discusses", "discussed", "give", "gives", "given", "giving",
@@ -509,6 +511,11 @@ def is_follow_up_request(query: str) -> bool:
         r"\b(?:show|draw|display|give|provide)\s+(?:me\s+)?(?:the\s+)?(?:diagram|figure|image|illustration)\b",
         r"\b(?:its|their)\s+(?:diagram|figure|image|illustration|structure|labellings?|labels?)\b",
         r"\b(?:explain|describe|show|what\s+are)\s+(?:the\s+)?(?:labellings?|labels?|parts?)\b",
+        r"\b(?:answer|solve|give\s+(?:the\s+)?answers?|provide\s+(?:the\s+)?answers?|solutions?\s+for)\s+(?:to\s+)?(?:each|all|both|every|any|the|these|those)?\s*(?:of\s+)?(?:the\s+)?(?:above|previous|listed|given|earlier|these|those)\s*(?:questions?|problems?|points?|ones?)?\b",
+        r"\b(?:answer|solve)\s+(?:each|all|both|every|them|these|those|it)\s*(?:as\s+well|too|also)?\b",
+        r"\b(?:answer|solve)\s+(?:each|all|every)\s+one\b",
+        r"\b(?:answer|solve|solution\s+for|what\s+is\s+the\s+answer\s+to)\s+(?:question|q|problem|part|number|no\.?)\s*#?\s*\d+\b",
+        r"\b(?:answer|solve)\s+(?:the\s+)?(?:\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth|last)\s+(?:one|question|problem|point)\b",
     ]
     return any(re.search(p, lowered) for p in followup_patterns)
 
@@ -1271,9 +1278,14 @@ def check_scope_boundary(
 
 
 _CONTINUATION_TERMS = {
-    # Marks & numerical counts
+    # Marks, numerical counts, ordinals & counters
     "mark", "marks", "tier", "point", "points", "bullet", "bullets",
-    "1", "2", "3", "4", "5", "6", "one", "two", "three", "four", "five", "six",
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "last",
+    "number", "no", "part", "parts", "item", "items", "ones",
+    # Quantifiers & determiners
+    "each", "every", "both", "either", "neither", "all", "any", "few", "several", "various",
     # Formatting, length & answer directives
     "make", "give", "provide", "write", "format", "style", "answer", "answers",
     "question", "questions", "quiz", "test", "practice", "sample", "mcq", "mcqs",
@@ -1281,6 +1293,9 @@ _CONTINUATION_TERMS = {
     "simple", "simpler", "simply", "detailed", "elaborate", "expand", "summarize",
     "summarise", "summary", "notes", "sentence", "sentences", "word", "words",
     "paragraph", "paragraphs", "example", "examples", "table", "tabular", "diagram",
+    # Answering & solving actions
+    "solve", "solves", "solving", "solved", "solution", "solutions",
+    "answering", "answered", "reply", "respond", "resolving", "resolved",
     # Conversational meta, continuation & system wrapper tokens
     "follow", "up", "followup", "context", "active", "topic", "earlier", "query",
     "substantive", "directive", "direction", "marking", "scheme", "view", "show",
@@ -1289,8 +1304,9 @@ _CONTINUATION_TERMS = {
     "these", "those", "explain", "explanation", "more", "again", "continue",
     "next", "why", "how", "what", "is", "are", "the", "of", "to", "in", "for",
     "on", "a", "an", "and", "or", "can", "you", "please", "tell", "me", "about",
-    "describe", "discuss", "solve", "now", "just", "only", "such", "difference",
+    "describe", "discuss", "now", "just", "only", "such", "difference",
     "differences", "between", "define", "definition",
+    "well", "also", "too", "together", "respectively", "properly", "correctly", "completely", "thoroughly", "as",
 }
 
 
@@ -1318,7 +1334,7 @@ def resolve_conversational_query(user_message: str, history: list[dict[str, str]
 
     # If the user supplied new substantive domain keywords (e.g. "cymose", "sandwich", "crispr"),
     # this is a new topic query, NOT a referential follow-up. Keep it strictly standalone!
-    if substantive_terms:
+    if substantive_terms and not is_follow_up_request(user_message):
         return user_message, user_message
 
     is_followup = (

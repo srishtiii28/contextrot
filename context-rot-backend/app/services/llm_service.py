@@ -176,6 +176,22 @@ def _clean_chunk_content(text: str) -> str:
 
 def _response_guidance(query: str, subject_category: str = "general") -> str:
     lowered = query.lower()
+    if re.search(r"\b(?:answer|solve|solution\s+for|what\s+is\s+the\s+answer\s+to)\s+(?:question|q|problem|part|number|no\.?)\s*#?\s*(\d+)\b", lowered):
+        q_match = re.search(r"\b(?:answer|solve|solution\s+for|what\s+is\s+the\s+answer\s+to)\s+(?:question|q|problem|part|number|no\.?)\s*#?\s*(\d+)\b", lowered)
+        q_num = q_match.group(1) if q_match else ""
+        return (
+            f"Provide a complete, accurate, and step-by-step answer specifically for question {q_num} from the previous turn. "
+            "State the question clearly first, then provide the full textbook explanation grounded in the syllabus excerpts."
+        )
+    if re.search(
+        r"\b(?:answer|solve|give\s+(?:the\s+)?answers?|provide\s+(?:the\s+)?answers?|solutions?\s+for)\s+(?:to\s+)?(?:each|all|both|every|any|the|these|those)?\s*(?:of\s+)?(?:the\s+)?(?:above|previous|listed|given|earlier|these|those)\s*(?:questions?|problems?|points?|ones?)?\b",
+        lowered,
+    ) or re.search(r"\b(?:answer|solve)\s+(?:each|all|both|every|them|these|those|it)\s*(?:as\s+well|too|also)?\b", lowered) or re.search(r"\b(?:answer|solve)\s+(?:each|all|every)\s+one\b", lowered):
+        return (
+            "Provide complete, accurate, and step-by-step answers for each of the specific questions or problems listed in the previous turn. "
+            "Address each question in order using a clearly numbered format matching the questions above. "
+            "Ground your explanations thoroughly in the provided syllabus notes without substituting, skipping, or inventing different questions."
+        )
     mark_match = re.search(r"\b([123456])\s*[- ]?\s*mark", lowered)
     if re.search(r"\b(one[- ]word|one word|fill in the blanks?|fill[- ]in[- ]the[- ]blanks?)\b", lowered):
         return "Give only the requested answers, in a clearly numbered list. Keep each answer to one word or a short phrase."
@@ -760,8 +776,8 @@ async def generate_response(
             )
             user_prompt = f"Question: {user_message}"
         else:
-            from app.services.rag_service import is_pure_continuation_request
-            is_cont = is_pure_continuation_request(user_message)
+            from app.services.rag_service import is_follow_up_request, is_pure_continuation_request
+            is_cont = is_pure_continuation_request(user_message) or is_follow_up_request(user_message)
             category = normalize_subject_category(subject, context_text=user_message)
             system_prompt = _build_subject_system_prompt(category)
             guidance = _response_guidance(user_message, category)
@@ -796,23 +812,26 @@ async def generate_response(
             model_name = settings.groq_model or "qwen/qwen3.8-27b"
 
         # When starting a new topic, filter out transient formatting directives from history to prevent format bleed
-        from app.services.rag_service import is_pure_continuation_request
+        from app.services.rag_service import is_follow_up_request, is_pure_continuation_request
         hist_to_use = conversation_history
-        if in_scope and not is_pure_continuation_request(user_message):
+        if in_scope and not (is_pure_continuation_request(user_message) or is_follow_up_request(user_message)):
             hist_to_use = _filter_transient_formatting_history(conversation_history)
 
-        # Keep recent 4 turns within 1,200 chars to avoid TPM exhaustion
-        compact_history = compress_history(hist_to_use[-4:], max_chars=1200)
+        # Keep recent 4 turns within 3,000 chars so multi-question lists are preserved
+        compact_history = compress_history(hist_to_use[-4:], max_chars=3000)
         messages = [
             {"role": "system", "content": system_prompt},
             *compact_history,
             {"role": "user", "content": user_msg_content},
         ]
+        target_max_tokens = 800
+        if re.search(r"\b(?:answer|solve)\s+(?:each|all|both|every|them|these|those)\b", user_message.lower()) or "important questions" in user_message.lower():
+            target_max_tokens = 1200
         request_payload = {
             "model": model_name,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 800,
+            "max_tokens": target_max_tokens,
         }
         max_retries = 3
         async with httpx.AsyncClient(timeout=settings.model_timeout_seconds) as client:

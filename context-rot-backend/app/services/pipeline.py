@@ -35,10 +35,15 @@ async def prepare(db, session_id, payload):
     session = db.get(StudySession, session_id)
     kb_id = session.knowledge_base_id if session else None
 
-    from app.services.rag_service import is_pure_continuation_request, normalize_query_typos, resolve_conversational_query
+    from app.services.rag_service import (
+        is_follow_up_request,
+        is_pure_continuation_request,
+        normalize_query_typos,
+        resolve_conversational_query,
+    )
 
     cleaned_query = normalize_query_typos(payload.content)
-    is_continuation = is_pure_continuation_request(cleaned_query)
+    is_continuation = is_pure_continuation_request(cleaned_query) or is_follow_up_request(cleaned_query)
     if is_continuation and history:
         prev_in_scope = True
         last_assistant = next((h for h in reversed(history) if h["role"] == "assistant"), None)
@@ -54,7 +59,7 @@ async def prepare(db, session_id, payload):
             if not chunks:
                 substantive_topics = [
                     h["content"] for h in history if h.get("role") == "user"
-                    and not is_pure_continuation_request(h.get("content", ""))
+                    and not (is_pure_continuation_request(h.get("content", "")) or is_follow_up_request(h.get("content", "")))
                 ]
                 if substantive_topics:
                     fb_retrieved = await retrieve(RetrievalRequest(query=substantive_topics[-1], session_id=session_id, knowledge_base_id=kb_id), db=db)
