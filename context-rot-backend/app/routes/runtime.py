@@ -41,12 +41,26 @@ def revoke(key_id:int,db:Session=Depends(get_db),user:User=Depends(current_user)
     key.revoked=True;db.commit();return {"revoked":True}
 
 
+def _detector_label(s):
+    if s.rot_service_url:
+        return "teammate HTTP service"
+    if s.reliability_detector == "judge":
+        from app.reliability.judge_client import JudgeConfigurationError, judge_target
+        try:
+            provider, model = judge_target()
+            return f"reliability v1: LLM judge ({provider}/{model})"
+        except JudgeConfigurationError as exc:
+            return f"reliability v1: LLM judge NOT CONFIGURED: {exc}"
+    return {"rules": "local rule-based demo baseline (unvalidated)",
+            "nli": f"reliability v2: local NLI ({s.nli_model})"}.get(s.reliability_detector, f"unknown detector {s.reliability_detector!r}")
+
+
 @router.get("/system/capabilities")
 def capabilities():
     s=get_settings()
-    return dict(provider=s.llm_provider,model=s.gemini_model if s.llm_provider=="gemini" else "offline-extractive",
+    return dict(provider=s.llm_provider,model={"gemini":s.gemini_model,"groq":s.groq_model}.get(s.llm_provider,"offline-extractive"),
         retrieval="teammate HTTP service" if s.rag_service_url else "local lexical demo baseline",
-        detector="teammate HTTP service" if s.rot_service_url else "local rule-based demo baseline (unvalidated)",
+        detector=_detector_label(s),
         worker="embedded" if s.embedded_worker else "external (start separately)",
         demo_faults=s.enable_demo_faults and s.llm_provider in {"offline","mock"},max_correction_attempts=1,
         scope_policy="refuse when retrieval finds no matching course material")

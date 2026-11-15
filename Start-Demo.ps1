@@ -20,7 +20,8 @@ if (-not (Test-Path -LiteralPath $pythonPath)) {
     & $pythonPath -m pip install -r (Join-Path $backendPath 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 }
-Write-Host "Demo: http://127.0.0.1:$Port/demo/lab.html"
+Write-Host "Student app: http://127.0.0.1:$Port/workspace/"
+Write-Host "Developer lab: http://127.0.0.1:$Port/demo/lab.html"
 Write-Host "API docs: http://127.0.0.1:$Port/docs"
 Write-Host 'Press Ctrl+C to stop. Default mode is offline; existing .env settings take precedence.'
 Push-Location $backendPath

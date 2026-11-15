@@ -7,3 +7,4 @@ context_rot.db
 *.sqlite3
 chroma_store/
 
+chroma_db/

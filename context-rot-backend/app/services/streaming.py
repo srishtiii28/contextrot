@@ -8,7 +8,8 @@ from app.services.llm_service import compress_history, generate_response
 
 async def generate_tokens(question, history, chunks, constraints, in_scope=True):
     s = get_settings()
-    if s.llm_provider in {"offline", "mock"}:
+    if s.llm_provider in {"offline", "mock"} or s.llm_provider != "gemini":
+        # Token streaming is implemented for Gemini only; other providers send the full answer in pieces.
         answer = await generate_response(
             user_message=question,
             conversation_history=history,

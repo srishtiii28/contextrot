@@ -76,6 +76,14 @@ Required result:
 {"topic_score":1,"contradiction_score":0,"memory_score":1,"scope_score":1,"health_score":100,"topic_drift":false,"contradiction_detected":false,"memory_violation":false,"alert":null}
 ```
 
+Optional fields, which the in-process reliability layer always fills:
+
+```json
+{"flags":[{"type":"course_conflict","severity":0.92,"claim":"A primary key can contain NULL values.","evidence":"A primary key cannot contain NULL values.","turn":null}],"detector":"judge","latency_ms":1840.5}
+```
+
+`type` is one of `contradiction`, `ignored_instruction`, `course_conflict` or `topic_drift`. For a contradiction, `turn` says how many answers back the conflicting answer is (1 = the previous answer). The `alert` is set only when `health_score` is below `RECOVERY_THRESHOLD`. Flags are stored with the analysis and included in `analysis.completed` and `answer.corrected` events. Without `ROT_SERVICE_URL`, the backend runs the in-process layer chosen by `RELIABILITY_DETECTOR` (see `docs/RELIABILITY.md`). Short social turns ("thanks", "ok") get a fixed short reply, are not queued, and have message status `skipped`. Answers marked `superseded` or `flagged` are left out of the history sent to the tutor and the checker.
+
 Scores are validated: component scores must be 0–1, health 0–100. Agree on higher-is-better semantics except `contradiction_score`, where higher means greater contradiction. `RECOVERY_THRESHOLD` defaults to 65 only for demonstration; tune it on development data. The service receives history preceding the current question/answer. Recovery is checked using the same constraints and updated retrieved context.
 
 Both external services optionally receive `X-API-Key` from `INTEGRATION_API_KEY`. Calls time out and malformed/non-2xx responses fail visibly. The detector should return an explanation, not claim its score is calibrated confidence.

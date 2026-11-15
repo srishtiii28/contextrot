@@ -16,6 +16,13 @@ if dev_db.exists() and dev_db.stat().st_size > 1000000:
     except Exception:
         pass
 
+# Tests must never read the developer's .env (real API keys, real detector) or call a paid API.
+from app.core import config as _config
+_config.Settings.model_config["env_file"] = None
+for _name in ("GROQ_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "JUDGE_API_KEY", "JUDGE_PROVIDER", "JUDGE_MODEL"):
+    os.environ.pop(_name, None)
+os.environ["RELIABILITY_DETECTOR"] = "rules"
+
 os.environ["DATABASE_URL"] = "sqlite:///" + test_db_path.as_posix()
 os.environ["LLM_PROVIDER"] = "offline"
 os.environ["EMBEDDED_WORKER"] = "false"

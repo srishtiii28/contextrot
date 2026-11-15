@@ -516,6 +516,11 @@ def is_follow_up_request(query: str) -> bool:
         r"\b(?:answer|solve)\s+(?:each|all|every)\s+one\b",
         r"\b(?:answer|solve|solution\s+for|what\s+is\s+the\s+answer\s+to)\s+(?:question|q|problem|part|number|no\.?)\s*#?\s*\d+\b",
         r"\b(?:answer|solve)\s+(?:the\s+)?(?:\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth|last)\s+(?:one|question|problem|point)\b",
+        # requests about the conversation itself ("summarise what we've established", "everything you've told me")
+        r"\b(?:summar(?:y|ise|ize)|recap|go\s+over)\b.*\b(?:we(?:'ve|\s+have)?|you(?:'ve|\s+have)?)\s+(?:established|discussed|covered|told|explained|said|gone\s+over)\b",
+        r"\b(?:summar(?:y|ise|ize)|recap)\b.*\b(?:this|our|the)\s+(?:session|conversation|chat)\b",
+        r"\b(?:the\s+)?(?:example|answer|explanation)\s+you\s+(?:gave|showed|told|wrote)\b",
+        r"\b(?:earlier|before|at\s+the\s+start)\s+you\s+(?:said|told|explained|mentioned|gave)\b",
     ]
     return any(re.search(p, lowered) for p in followup_patterns)
 
@@ -1261,7 +1266,7 @@ def check_scope_boundary(
 
     # 4. Standard semantic & lexical overlap for general and biology subjects
     raw_terms = _terms(eval_query)
-    topic_terms = raw_terms - _STUDY_INTENT_TERMS - _CONTINUATION_TERMS
+    topic_terms = raw_terms - _STUDY_INTENT_TERMS - _CONTINUATION_TERMS - {_normalise_term(t) for t in _CONVERSATIONAL_TERMS}
     if not topic_terms:
         return True
 
@@ -1275,6 +1280,25 @@ def check_scope_boundary(
 
     best_chunk_topic_overlap = max((len(topic_terms & _terms(c.text)) for c in retrieved_chunks), default=0)
     return best_chunk_topic_overlap >= 2
+
+
+# Words students use to push back, hurry or ask for confirmation ("Are you sure? My professor said...",
+# "Just tell me the exact answer"). They carry no course topic, so counting them as topic terms pushed real
+# course questions below the 60% syllabus-overlap rule and the answers were never checked.
+_CONVERSATIONAL_TERMS = {
+    "sure", "friend", "friends", "professor", "prof", "teacher", "sir", "madam", "tutor", "classmate", "senior",
+    "said", "say", "says", "saying", "told", "tell", "telling", "claim", "claims", "claimed", "insist", "insists",
+    "confirm", "confirmed", "please", "pls", "plz", "just", "exact", "exactly", "wrong", "right", "correct",
+    "incorrect", "agree", "disagree", "actually", "really", "honestly", "seriously", "think", "thought",
+    "believe", "heard", "hear", "online", "internet", "google", "website", "youtube", "video", "book",
+    "hurry", "quick", "quickly", "time", "full", "complete", "final", "answer", "answers", "give", "also",
+    "true", "false", "yes", "okay", "ok", "dont", "don", "doesn", "isn", "aren", "won", "can", "cant",
+    "never", "always", "way", "thing", "things", "stuff", "mean", "meant",
+    # references to the conversation itself ("summarise what we've established in this session")
+    "slide", "slides", "exam", "exams", "write", "note", "summary", "summarise", "summarize", "recap",
+    "session", "earlier", "before", "start", "gave", "given", "mentioned", "discussed", "covered",
+    "established", "explained", "everything", "checked", "us", "we", "ve", "ll", "re", "let", "lets",
+}
 
 
 _CONTINUATION_TERMS = {

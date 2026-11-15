@@ -21,6 +21,23 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = 0.25
     job_lease_seconds: int = 300
     recovery_threshold: float = 65
+    # Reliability layer (context rot detection). See docs/RELIABILITY.md.
+    reliability_detector: str = "rules"  # rules | judge | nli
+    reliability_timeout_seconds: float = 10
+    reliability_history_turns: int = 6
+    skip_social_turns: bool = True
+    judge_provider: str | None = None  # defaults to llm_provider
+    judge_model: str | None = None  # defaults to the provider's generation model
+    judge_api_key: str | None = None  # separate key for the judge; defaults to the provider's key
+    nli_model: str = "cross-encoder/nli-deberta-v3-xsmall"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    nli_device: str = "cpu"  # cpu | mps | cuda
+    nli_pair_min_similarity: float = 0.70  # v2 compares only sentences about the same thing
+    # Health score H = 100 - sum(weight * severity); placeholders until fitted on dev sessions.
+    w_contradiction: float = 50
+    w_instruction: float = 45
+    w_course_conflict: float = 45
+    w_drift: float = 45
     enable_demo_faults: bool = True
     rag_service_url: str | None = None
     rot_service_url: str | None = None

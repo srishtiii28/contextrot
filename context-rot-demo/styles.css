@@ -356,3 +356,39 @@ h1, h2, .brand { font-family: "Space Grotesk", sans-serif; }
   background: #f0f7f3;
   color: var(--green);
 }
+
+/* Reliability layer: per-answer checks, corrections, session health and standing instructions */
+.health-pill { display: flex; align-items: baseline; gap: 7px; padding: 8px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.health-pill .health-label { color: var(--muted); font-size: 12px; font-weight: 600; }
+.health-pill strong { color: var(--green); font-family: "Space Grotesk", sans-serif; font-size: 20px; }
+.health-pill small { color: var(--muted); font-size: 12px; }
+.health-pill.health-low strong { color: #b45309; }
+.instructions-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; font-size: 13px; }
+.instructions-label { color: var(--muted); font-weight: 600; }
+.instruction-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.instruction-chip { padding: 5px 11px; border-radius: 999px; background: var(--mint); color: var(--green); font-weight: 600; }
+.instruction-empty { color: var(--muted); }
+.instruction-form { display: flex; gap: 6px; align-items: center; }
+.instruction-form input { width: 280px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; }
+.instruction-form .button { padding: 8px 13px; }
+.reliability { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; }
+.rel-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+.rel-checking { background: #eef2f0; color: var(--muted); }
+.rel-ok { background: var(--mint); color: var(--green); }
+.rel-flagged, .rel-replaced { background: #fff4e5; color: #b45309; }
+.rel-unverified { background: #f1f1f1; color: #555; }
+.rel-reason { color: var(--muted); line-height: 1.45; }
+.rel-retry { font-size: 12.5px; }
+.spinner { width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.message.superseded { max-width: 78%; }
+.replaced-answer summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; list-style: none; }
+.replaced-answer summary::-webkit-details-marker { display: none; }
+.replaced-answer .show-original { color: var(--green); font-weight: 600; text-decoration: underline; }
+.replaced-answer[open] .show-original { display: none; }
+.replaced-answer .message-bubble { margin-top: 8px; opacity: .65; text-decoration: line-through; text-decoration-color: rgba(180, 83, 9, .45); }
+.correction-label { margin-bottom: 5px; color: var(--green); font-size: 12px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.message.correction .message-bubble { box-shadow: inset 3px 0 0 var(--mint-strong); }
+.message.flagged .message-bubble { box-shadow: inset 3px 0 0 #f59e0b; }
+.composer-status { min-height: 18px; margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+.composer-waiting .send-button { opacity: .45; cursor: wait; }

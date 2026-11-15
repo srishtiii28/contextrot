@@ -57,3 +57,7 @@ def create_tables() -> None:
             columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(message_states)")}
             if "scope_warning" not in columns:
                 connection.exec_driver_sql("ALTER TABLE message_states ADD COLUMN scope_warning TEXT")
+            columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(analysis_results)")}
+            for name, sql_type in (("flags", "JSON"), ("detector", "VARCHAR(30)"), ("latency_ms", "FLOAT")):
+                if name not in columns:
+                    connection.exec_driver_sql(f"ALTER TABLE analysis_results ADD COLUMN {name} {sql_type}")

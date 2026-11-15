@@ -2,34 +2,31 @@
 
 ## Local setup
 
-Run `Start-Demo.ps1` from the project root. Or, from this directory:
+The [root README](../README.md) is the step-by-step guide: install, offline vs real-provider mode, start, and which URLs to open. In short, from this directory:
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt     # Windows: py -3 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000  # Windows: .\.venv\Scripts\python -m uvicorn ...
 ```
 
-For exact versions from the tested environment, install `requirements-tested.txt` instead of the broad requirements file.
+`requirements-tested.txt` records the exact versions of the core packages used for validation. Install it on top of `requirements.txt` if you need those pins. On its own it does not include `chromadb`, `pymupdf` or `matplotlib`.
 
-No `.env` is needed for offline mode (`mock` is retained as an alias for offline). To customize, copy `.env.example` to `.env` and edit it. Do not overwrite an existing `.env`. The SQLite path is relative to this backend directory, so start the server here.
+No `.env` is needed for offline mode (`mock` is an alias for offline). To customise, copy `.env.example` to `.env` and edit it, but do not overwrite an existing `.env`. The SQLite path is relative to this directory, so start the server here.
 
-- Demo: http://127.0.0.1:8000/demo/lab.html
+- Student app: http://127.0.0.1:8000/workspace/
+- Developer lab: http://127.0.0.1:8000/demo/lab.html
 - API documentation: http://127.0.0.1:8000/docs
 - Capability disclosure: http://127.0.0.1:8000/system/capabilities
-- Preserved tutor demo client: http://127.0.0.1:8000/demo/
 
-## RAG & Knowledge Retrieval Slice
+## Reliability layer
 
-The backend supports the complete prototype flow:
+Each in-scope answer is scored in the background worker against the session history, the student's instructions and the retrieved course text. The worker stores a health score H (0–100) and flags with evidence. Set `RELIABILITY_DETECTOR`:
 
-1. Create an account and a reference library (`POST /knowledge-bases`).
-2. Upload course PDFs to `POST /knowledge-bases/{id}/documents`.
-3. Create a study session linked to that library.
-4. Send a question to `POST /sessions/{session_id}/messages`.
-5. The response includes the grounded answer and the retrieved source pages in `sources`.
+- `rules` (default): the offline demo baseline. It catches only the scripted faults.
+- `judge`: v1, one LLM-judge call per answer. Set `JUDGE_PROVIDER`/`JUDGE_MODEL` to `groq` or `gemini`.
+- `nli`: v2, local NLI and MiniLM checks. Run `pip install -r requirements-nli.txt` first.
 
-Documents are extracted with `pypdf`, split into overlapping chunks, embedded locally, and stored in SQLite / ChromaDB. Retrieval is session-scoped, so one study session cannot use another session's documents.
+Evaluate and fit thresholds with `python scripts/eval_reliability.py`. See [docs/RELIABILITY.md](../docs/RELIABILITY.md).
 
 ## Key endpoints
 
@@ -44,11 +41,11 @@ Documents are extracted with `pypdf`, split into overlapping chunks, embedded lo
 
 ## Run checks
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-# Start the server in another terminal before the following:
-.\.venv\Scripts\python.exe scripts/demo_check.py
-.\.venv\Scripts\python.exe scripts/load_test.py --concurrency 20 --rounds 3
+```bash
+.venv/bin/python -m pytest -q        # Windows: .\.venv\Scripts\python -m pytest -q
+# Start the server (offline mode) in another terminal before the following:
+.venv/bin/python scripts/demo_check.py
+.venv/bin/python scripts/load_test.py --concurrency 20 --rounds 3
 ```
 
 Generated reports go into `reports/`. The demo-check script creates an isolated demo account, exercises the examiner path, saves non-secret evidence and revokes its temporary API key. Load testing creates test sessions and records first-content and completion timing separately.
@@ -57,8 +54,8 @@ Generated reports go into `reports/`. The demo-check script creates an isolated 
 
 Default: one database-polled worker runs within the API process, so the demo needs only one command. For a separate process, set `EMBEDDED_WORKER=false` in both terminals, then run:
 
-```powershell
-.\.venv\Scripts\python.exe -m app.services.worker
+```bash
+.venv/bin/python -m app.services.worker      # Windows: .\.venv\Scripts\python -m app.services.worker
 ```
 
 ## Gemini provider

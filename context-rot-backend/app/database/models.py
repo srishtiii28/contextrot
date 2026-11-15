@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, LargeBinary, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.database import Base
@@ -82,6 +82,9 @@ class AnalysisResult(Base):
     contradiction_detected: Mapped[bool] = mapped_column(Boolean, default=False)
     memory_violation: Mapped[bool] = mapped_column(Boolean, default=False)
     alert: Mapped[str | None] = mapped_column(Text, nullable=True)
+    flags: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    detector: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     session: Mapped[StudySession] = relationship(back_populates="analyses")
 
