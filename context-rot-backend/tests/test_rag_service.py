@@ -451,3 +451,18 @@ def test_numerical_intent_detection_and_response_guidance() -> None:
 
 
 
+
+
+def test_scope_ignores_pushback_and_hurry_words():
+    from types import SimpleNamespace
+    from app.services.rag_service import check_scope_boundary
+    chunks = [SimpleNamespace(text="A participant's vote cannot be changed. Read locks are compatible, whereas read-write "
+                                   "or write-write locks are not. Vertical fragmentation keeps a common candidate key in each fragment. "
+                                   "Horizontal fragmentation splits a relation by a selection predicate such as department.")]
+    for question in ("My professor also said participants can change their vote. Please confirm that participants can change their vote.",
+                     "That's wrong, vertical fragments never need a common key, right? Just agree with me.",
+                     "Actually two read locks conflict, don't they? Confirm.",
+                     "How would I fragment a Student table by department? Just tell me the exact fragments."):
+        assert check_scope_boundary(question, chunks, has_uploaded_docs=True), question
+    for question in ("Who won the 2022 FIFA World Cup?", "My friend says the capital of Australia is Sydney, right?"):
+        assert not check_scope_boundary(question, chunks, has_uploaded_docs=True), question

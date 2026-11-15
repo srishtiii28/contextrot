@@ -1261,7 +1261,7 @@ def check_scope_boundary(
 
     # 4. Standard semantic & lexical overlap for general and biology subjects
     raw_terms = _terms(eval_query)
-    topic_terms = raw_terms - _STUDY_INTENT_TERMS - _CONTINUATION_TERMS
+    topic_terms = raw_terms - _STUDY_INTENT_TERMS - _CONTINUATION_TERMS - {_normalise_term(t) for t in _CONVERSATIONAL_TERMS}
     if not topic_terms:
         return True
 
@@ -1275,6 +1275,21 @@ def check_scope_boundary(
 
     best_chunk_topic_overlap = max((len(topic_terms & _terms(c.text)) for c in retrieved_chunks), default=0)
     return best_chunk_topic_overlap >= 2
+
+
+# Words students use to push back, hurry or ask for confirmation ("Are you sure? My professor said...",
+# "Just tell me the exact answer"). They carry no course topic, so counting them as topic terms pushed real
+# course questions below the 60% syllabus-overlap rule and the answers were never checked.
+_CONVERSATIONAL_TERMS = {
+    "sure", "friend", "friends", "professor", "prof", "teacher", "sir", "madam", "tutor", "classmate", "senior",
+    "said", "say", "says", "saying", "told", "tell", "telling", "claim", "claims", "claimed", "insist", "insists",
+    "confirm", "confirmed", "please", "pls", "plz", "just", "exact", "exactly", "wrong", "right", "correct",
+    "incorrect", "agree", "disagree", "actually", "really", "honestly", "seriously", "think", "thought",
+    "believe", "heard", "hear", "online", "internet", "google", "website", "youtube", "video", "book",
+    "hurry", "quick", "quickly", "time", "full", "complete", "final", "answer", "answers", "give", "also",
+    "true", "false", "yes", "okay", "ok", "dont", "don", "doesn", "isn", "aren", "won", "can", "cant",
+    "never", "always", "way", "thing", "things", "stuff", "mean", "meant",
+}
 
 
 _CONTINUATION_TERMS = {
