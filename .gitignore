@@ -8,3 +8,5 @@
 tmp/
 **/reports/*.json
 **/reports/*.jsonl
+# Course material: keep PDFs out of git (uploads are stored in the database)
+*.pdf
