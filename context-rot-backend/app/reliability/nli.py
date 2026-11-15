@@ -38,13 +38,15 @@ class NLIBackend(Protocol):
 
 
 class SentenceTransformersBackend:
-    def __init__(self, nli_model: str, embedding_model: str):
+    def __init__(self, nli_model: str, embedding_model: str, device: str = "cpu"):
         try:
             from sentence_transformers import CrossEncoder, SentenceTransformer
         except ImportError as exc:
             raise RuntimeError("RELIABILITY_DETECTOR=nli needs: pip install -r requirements-nli.txt") from exc
-        self._nli = CrossEncoder(nli_model)
-        self._embedder = SentenceTransformer(embedding_model)
+        # CPU by default: these models are small, and on a shared GPU (e.g. Apple MPS next to a local LLM)
+        # loading them can run out of memory and fail every check.
+        self._nli = CrossEncoder(nli_model, device=device)
+        self._embedder = SentenceTransformer(embedding_model, device=device)
         config = getattr(self._nli, "config", None) or self._nli.model.config
         self._labels = [config.id2label[i].lower() for i in range(len(config.id2label))]
 
@@ -73,7 +75,7 @@ def get_backend() -> NLIBackend:
     global _backend
     if _backend is None:
         s = get_settings()
-        _backend = SentenceTransformersBackend(s.nli_model, s.embedding_model)
+        _backend = SentenceTransformersBackend(s.nli_model, s.embedding_model, s.nli_device)
     return _backend
 
 

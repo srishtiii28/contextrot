@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     skip_social_turns: bool = True
     judge_provider: str | None = None  # defaults to llm_provider
     judge_model: str | None = None  # defaults to the provider's generation model
+    judge_api_key: str | None = None  # separate key for the judge; defaults to the provider's key
     nli_model: str = "cross-encoder/nli-deberta-v3-xsmall"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    nli_device: str = "cpu"  # cpu | mps | cuda
     nli_pair_min_similarity: float = 0.70  # v2 compares only sentences about the same thing
     # Health score H = 100 - sum(weight * severity); placeholders until fitted on dev sessions.
     w_contradiction: float = 50
