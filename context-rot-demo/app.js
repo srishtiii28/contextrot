@@ -1355,6 +1355,7 @@ async function createSession(event) {
         constraints: $("session-instructions").value.split("\n").map((line) => line.trim()).filter(Boolean),
       }),
     });
+    state.openingCreatedSession = true;
     $("session-dialog").close();
     $("session-form").reset();
     state.sessions.unshift(session);
@@ -1522,7 +1523,11 @@ $("list-new-session").addEventListener("click", openNewSession);
 $("new-library-button").addEventListener("click", () => $("library-dialog").showModal());
 $("close-library-dialog").addEventListener("click", () => $("library-dialog").close());
 $("library-form").addEventListener("submit", createKnowledgeBase);
-$("session-dialog").addEventListener("close", () => showDashboard());
+// Closing the dialog without creating a session returns to the dashboard; after creating one, stay in it.
+$("session-dialog").addEventListener("close", () => {
+  if (state.openingCreatedSession) state.openingCreatedSession = false;
+  else showDashboard();
+});
 document.addEventListener("click", (event) => {
   const nav = event.target.closest("[data-view]");
   if (nav) {
