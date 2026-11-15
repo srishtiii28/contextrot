@@ -48,13 +48,56 @@ def _limit(unit: str, lowered: str) -> int | None:
     return None
 
 
-def _check_one(text: str, answer: str) -> tuple[bool, list[dict]]:
+_REQUIRED_LINE = re.compile(
+    r"\b(end|finish|close|start|begin)\s+(?:every|each|all|your|the|each of your)?\s*(?:answers?|responses?|replies|reply)?\s*"
+    r"with\s+(?:a\s+|one\s+)?(?:separate\s+|new\s+|final\s+|short\s+)?(?:line|sentence)\s+"
+    r"(?:starting|beginning|that\s+starts|that\s+begins)\s+(?:with\s+)?[\'\"\u2018\u201c]([^\'\"\u2019\u201d]{1,40})[\'\"\u2019\u201d]")
+
+
+def _plain_lines(answer: str) -> list[str]:
+    lines = []
+    for line in clean_answer(answer).splitlines():
+        line = re.sub(r"^[\s>*_#-]+", "", line).replace("**", "").replace("__", "").strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+def required_lines(constraints: list[dict]) -> list[tuple[str, str]]:
+    """(position, prefix) for instructions like "end every answer with a line starting 'Exam tip:'"."""
+    found = []
+    for item in constraints:
+        for position, prefix in _REQUIRED_LINE.findall((item.get("content") or "").lower()):
+            found.append(("end" if position in ("end", "finish", "close") else "start", prefix.strip()))
+    return found
+
+
+def _without_required_lines(answer: str, prefixes: list[str]) -> str:
+    """The answer without lines the student asked for (e.g. "Exam tip: ..."), so they don't count toward
+    a sentence or word limit set in the same breath ("at most 2 sentences, and end with an exam tip")."""
+    if not prefixes:
+        return answer
+    keep = [line for line in (answer or "").splitlines()
+            if not any(re.sub(r"^[\s>*_#-]+", "", line).replace("**", "").strip().lower().startswith(p) for p in prefixes)]
+    return "\n".join(keep)
+
+
+def _check_one(text: str, answer: str, prefixes: list[str] | None = None) -> tuple[bool, list[dict]]:
     """Returns (was_measurable, violations) for one constraint."""
     lowered = text.lower()
     if _PER_ITEM.search(lowered):
         return False, []  # limits per bullet/step need structure-aware checking: left to the judge
     measurable, found = False, []
     cleaned = clean_answer(answer)
+
+    for position, prefix in required_lines([{"content": text}]):
+        measurable = True
+        lines = [line.lower() for line in _plain_lines(answer)]
+        line = (lines[-1] if position == "end" else lines[0]) if lines else ""
+        if not line.startswith(prefix):
+            where = "last" if position == "end" else "first"
+            found.append(dict(constraint=text, evidence=f"{where} line does not start with '{prefix}'", severity=0.8))
+    answer = _without_required_lines(answer, prefixes or [p for _, p in required_lines([{"content": text}])])
 
     limit = _limit("sentence", lowered)
     if limit is not None:
@@ -94,7 +137,7 @@ def _check_one(text: str, answer: str) -> tuple[bool, list[dict]]:
         if not re.search(r"\b(?:for example|for instance|e\.g\.|example|such as|consider)\b", cleaned.lower()):
             found.append(dict(constraint=text, evidence="no example in the answer", severity=0.6))
 
-    if re.search(r"\b(?:no|don'?t use|do not use|avoid|without)\s+(?:any\s+)?(?:code|code blocks?)\b", lowered):
+    if re.search(r"\b(?:no|don'?t use|do not use|never use|avoid|without)\s+(?:any\s+)?(?:code|code blocks?)\b", lowered):
         measurable = True
         if "```" in (answer or ""):
             found.append(dict(constraint=text, evidence="answer contains a code block", severity=0.8))
@@ -104,14 +147,60 @@ def _check_one(text: str, answer: str) -> tuple[bool, list[dict]]:
 
 def check_instructions(constraints: list[dict], answer: str) -> InstructionCheck:
     result = InstructionCheck()
+    prefixes = [p for _, p in required_lines(constraints)]
     for item in constraints:
         text = (item.get("content") or "").strip()
         if not text:
             continue
-        measurable, found = _check_one(text, answer)
+        measurable, found = _check_one(text, answer, prefixes)
         if measurable:
             result.checked += 1
             result.violations.extend(found)
         else:
             result.unchecked.append(text)
     return result
+
+
+# --- Standing instructions typed in chat --------------------------------------------------------------
+# The session manager (midsem slide 4) extracts constraints from the conversation: a student who writes
+# "for this whole session, answer in 2 sentences" in chat means the same as one who uses the instructions box.
+
+_STANDING = re.compile(
+    r"\b(?:for\s+(?:this|the)\s+(?:whole|entire|rest\s+of\s+(?:this|the))\s+(?:session|conversation|chat)"
+    r"|for\s+the\s+rest\s+of\s+(?:this|the)\s+(?:session|conversation|chat)"
+    r"|(?:from\s+now\s+on|going\s+forward|from\s+here\s+on|henceforth|until\s+i\s+say\s+otherwise)"
+    r"|in\s+(?:all|every|each)\s+(?:of\s+your\s+)?(?:answers?|responses?|replies|reply)"
+    r"|(?:every|each)\s+(?:answer|response|reply)\s+(?:should|must|needs?\s+to)"
+    r"|always\s+(?:answer|reply|respond|use|give|include|keep|write|end|start|begin|add|explain|format)"
+    r"|never\s+(?:use|give|include|write|answer|reply|respond|add|show))\b", re.IGNORECASE)
+_CANCEL = re.compile(
+    r"\b(?:stop\s+(?:using|giving|adding|ending|starting|including|writing|with)|no\s+longer|you\s+can\s+stop|"
+    r"don'?t\s+(?:need|have)\s+to|forget\s+(?:the|my|that)\s+(?:earlier\s+|previous\s+)?(?:instruction|rule)|"
+    r"ignore\s+(?:the|my)\s+(?:earlier\s+|previous\s+)?(?:instruction|rule))", re.IGNORECASE)
+_CHAT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def standing_instructions(message: str) -> list[str]:
+    """Sentences of a chat message that set an instruction for the rest of the session."""
+    found = []
+    for sentence in _CHAT_SPLIT.split(message or ""):
+        sentence = sentence.strip()
+        if not sentence or sentence.endswith("?") or _CANCEL.search(sentence):
+            continue
+        if _STANDING.search(sentence):
+            found.append(re.sub(r"^(?:please|pls|ok(?:ay)?|also|and)[,\s]+", "", sentence, flags=re.IGNORECASE)[:300])
+    return found
+
+
+def cancelled_instructions(message: str, existing: list[str]) -> list[str]:
+    """Existing instructions the student withdrew ("you can stop adding exam tips now")."""
+    from app.reliability.text import content_terms
+    withdrawn = []
+    for sentence in _CHAT_SPLIT.split(message or ""):
+        if not _CANCEL.search(sentence):
+            continue
+        terms = content_terms(sentence) - {"stop", "longer", "need", "instruction", "rule", "earlier", "previous", "forget", "ignore"}
+        for text in existing:
+            if terms and len(terms & content_terms(text)) >= min(2, len(terms)):
+                withdrawn.append(text)
+    return withdrawn

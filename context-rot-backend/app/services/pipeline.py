@@ -10,6 +10,9 @@ from app.schemas.message import MessageResponse
 from app.services.llm_service import compress_history
 
 
+RELIABILITY_HISTORY_CHARS = 200000  # stored with the job; the judge sends only selected sentences to the LLM
+
+
 def serialize_message(db, message):
     result = MessageResponse.model_validate(message)
     detail = db.get(MessageState, message.id)
@@ -36,6 +39,7 @@ async def prepare(db, session_id, payload):
     hidden = set(db.scalars(select(MessageState.message_id).where(
         MessageState.message_id.in_([m.id for m in messages]), MessageState.status.in_(["superseded", "flagged"])))) if messages else set()
     history = [dict(role=m.role, content=m.content) for m in messages if m.id not in hidden]
+    sync_chat_instructions(db, session_id, payload.content or "")
     constraints = [dict(type=c.constraint_type, content=c.content) for c in db.scalars(select(Constraint).where(Constraint.session_id == session_id))]
     if social_reply(payload):
         return history, constraints, [], True
@@ -77,6 +81,24 @@ async def prepare(db, session_id, payload):
 
     retrieved = await retrieve(RetrievalRequest(query=cleaned_query, session_id=session_id, knowledge_base_id=kb_id), db=db)
     return history, constraints, retrieved.chunks, retrieved.in_scope
+
+
+def sync_chat_instructions(db, session_id, message):
+    """Standing instructions typed in chat ("for this whole session...", "from now on...") become session
+    constraints, so the tutor follows them on every later answer and the reliability layer checks them.
+    "You can stop adding exam tips" removes a matching one. Saved with the turn; rolled back if it fails."""
+    from app.reliability.instructions import cancelled_instructions, standing_instructions
+    existing = list(db.scalars(select(Constraint).where(Constraint.session_id == session_id)))
+    for text in cancelled_instructions(message, [c.content for c in existing]):
+        for c in existing:
+            if c.content == text:
+                db.delete(c)
+    known = {c.content.strip().lower() for c in existing}
+    for text in standing_instructions(message):
+        if text.strip().lower() not in known:
+            db.add(Constraint(session_id=session_id, constraint_type="instruction", content=text))
+            known.add(text.strip().lower())
+    db.flush()
 
 
 SOCIAL_REPLIES = {
@@ -144,7 +166,8 @@ def persist_answer(db, session_id, payload, answer, history, constraints, chunks
             message_id=assistant.id,
             current_question=payload.content,
             current_answer=answer,
-            conversation_history=compress_history(history),
+            # More history than the tutor sees, so the judge can catch contradictions of much earlier answers.
+            conversation_history=compress_history(history, RELIABILITY_HISTORY_CHARS),
             constraints=constraints,
             retrieved_context=sources,
         )
