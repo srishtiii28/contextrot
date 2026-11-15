@@ -1,0 +1,3 @@
+# Optional: reliability layer v2 (RELIABILITY_DETECTOR=nli). CPU is enough.
+sentence-transformers>=3.0,<6.0
+torch>=2.2
