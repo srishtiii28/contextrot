@@ -516,6 +516,11 @@ def is_follow_up_request(query: str) -> bool:
         r"\b(?:answer|solve)\s+(?:each|all|every)\s+one\b",
         r"\b(?:answer|solve|solution\s+for|what\s+is\s+the\s+answer\s+to)\s+(?:question|q|problem|part|number|no\.?)\s*#?\s*\d+\b",
         r"\b(?:answer|solve)\s+(?:the\s+)?(?:\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth|last)\s+(?:one|question|problem|point)\b",
+        # requests about the conversation itself ("summarise what we've established", "everything you've told me")
+        r"\b(?:summar(?:y|ise|ize)|recap|go\s+over)\b.*\b(?:we(?:'ve|\s+have)?|you(?:'ve|\s+have)?)\s+(?:established|discussed|covered|told|explained|said|gone\s+over)\b",
+        r"\b(?:summar(?:y|ise|ize)|recap)\b.*\b(?:this|our|the)\s+(?:session|conversation|chat)\b",
+        r"\b(?:the\s+)?(?:example|answer|explanation)\s+you\s+(?:gave|showed|told|wrote)\b",
+        r"\b(?:earlier|before|at\s+the\s+start)\s+you\s+(?:said|told|explained|mentioned|gave)\b",
     ]
     return any(re.search(p, lowered) for p in followup_patterns)
 
@@ -1289,6 +1294,10 @@ _CONVERSATIONAL_TERMS = {
     "hurry", "quick", "quickly", "time", "full", "complete", "final", "answer", "answers", "give", "also",
     "true", "false", "yes", "okay", "ok", "dont", "don", "doesn", "isn", "aren", "won", "can", "cant",
     "never", "always", "way", "thing", "things", "stuff", "mean", "meant",
+    # references to the conversation itself ("summarise what we've established in this session")
+    "slide", "slides", "exam", "exams", "write", "note", "summary", "summarise", "summarize", "recap",
+    "session", "earlier", "before", "start", "gave", "given", "mentioned", "discussed", "covered",
+    "established", "explained", "everything", "checked", "us", "we", "ve", "ll", "re", "let", "lets",
 }
 
 
