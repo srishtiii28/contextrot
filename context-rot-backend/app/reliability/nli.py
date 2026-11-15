@@ -1,12 +1,14 @@
 """Reliability layer v2: local consistency checks with an NLI cross-encoder and MiniLM embeddings
 (midsem slide 8, method [6]). No LLM call. Needs `pip install -r requirements-nli.txt`.
 
-- contradiction: answer claims vs. claims of the last N assistant answers. Only pairs that are
-  topically close (embedding cosine) are sent to NLI, which bounds cost and false alarms.
-- course_conflict: answer claims vs. sentence windows of the retrieved excerpts. A claim is flagged only
-  when some window contradicts it and no window entails it.
-- topic_drift: low embedding similarity between the answer and the question (or the previous answer,
-  for follow-ups such as "explain more").
+- contradiction: answer claims vs. claims of the last N assistant answers. A pair counts only if both
+  sentences are about the same thing (MiniLM cosine >= NLI_PAIR_MIN_SIMILARITY) and the NLI model calls it
+  a contradiction in BOTH directions. Small NLI models call statements about different subjects
+  ("mitosis ..." vs "meiosis ...") contradictory; the two gates remove most of those false alarms.
+- course_conflict: answer claims vs. single sentences of the retrieved excerpts, with the same gates. A
+  claim is flagged only when some sentence contradicts it and no excerpt passage entails it.
+- topic_drift: low embedding similarity between the answer and every reference: the question, the
+  previous answer (for follow-ups such as "explain more") and the excerpts (for short questions like "What is 2NF?").
 - instructions: deterministic rules only; unmeasurable instructions are not checked in v2.
 """
 import asyncio
@@ -17,14 +19,14 @@ from typing import Protocol
 from app.core.config import get_settings
 from app.reliability.health import Signals, aggregate
 from app.reliability.instructions import check_instructions
-from app.reliability.text import claims, clean_answer, prior_assistant_turns
+from app.reliability.text import claims, clean_answer, prior_assistant_turns, prose_sentences
 from app.schemas.analysis import AnalysisInput
 
 MAX_ANSWER_CLAIMS = 12
 MAX_PRIOR_CLAIMS = 60
 PAIRS_PER_CLAIM = 3
-RELATED_COSINE = 0.35
 DRIFT_COSINE = 0.30
+CONTRADICTION_CUT = 0.5
 
 
 class NLIBackend(Protocol):
@@ -81,16 +83,30 @@ def _cos(a, b):
     return dot / (na * nb) if na and nb else 0.0
 
 
+def _sentences(text: str) -> list[str]:
+    return [x for x in prose_sentences(text or "") if len(x.split()) >= 3]
+
+
 def _windows(text: str, size: int = 2) -> list[str]:
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", text or "")) if len(s.split()) >= 3]
+    sentences = _sentences(text)
     if len(sentences) <= size:
         return [" ".join(sentences)] if sentences else []
     return [" ".join(sentences[i:i + size]) for i in range(0, len(sentences) - size + 1)]
 
 
-def _top_related(claim_vec, candidates, k):
+def _top_related(claim_vec, candidates, k, minimum):
     ranked = sorted(((_cos(claim_vec, vec), i) for i, vec in enumerate(candidates)), reverse=True)
-    return [(sim, i) for sim, i in ranked[:k] if sim >= RELATED_COSINE]
+    return [(sim, i) for sim, i in ranked[:k] if sim >= minimum]
+
+
+def _bidirectional(backend, pairs):
+    """NLI on (a, b) and (b, a); contradiction is the weaker direction, entailment the forward one."""
+    if not pairs:
+        return []
+    results = backend.nli(pairs + [(b, a) for a, b in pairs])
+    n = len(pairs)
+    return [dict(contradiction=min(results[i].get("contradiction", 0.0), results[n + i].get("contradiction", 0.0)),
+                 entailment=results[i].get("entailment", 0.0)) for i in range(n)]
 
 
 def _score_sync(payload: AnalysisInput, backend: NLIBackend) -> dict:
@@ -100,59 +116,64 @@ def _score_sync(payload: AnalysisInput, backend: NLIBackend) -> dict:
     for v in rules.violations:
         signals.add("ignored_instruction", v["severity"], claim=v["constraint"], evidence=v["evidence"])
 
+    gate = settings.nli_pair_min_similarity
     answer_claims = claims(payload.current_answer)[:MAX_ANSWER_CLAIMS]
     prior = [(turn, c) for turn, text in prior_assistant_turns(payload.conversation_history, settings.reliability_history_turns)
              for c in claims(text)][-MAX_PRIOR_CLAIMS:]
-    windows = [w for chunk in payload.retrieved_context[:5] for w in _windows(chunk.get("text", ""))][:80]
+    excerpts = [c.get("text", "") for c in payload.retrieved_context[:5]]
+    sentences = [x for text in excerpts for x in _sentences(text)][:80]
+    windows = [w for text in excerpts for w in _windows(text)][:80]
     answer_text = clean_answer(payload.current_answer)[:2000]
-    previous_answer = prior_assistant_turns(payload.conversation_history, 1)
+    previous = prior_assistant_turns(payload.conversation_history, 1)
+    references = [payload.current_question] + ([clean_answer(previous[-1][1])[:2000]] if previous else [])
 
-    vectors = backend.embed(answer_claims + [c for _, c in prior] + windows + [payload.current_question, answer_text]
-                            + ([clean_answer(previous_answer[-1][1])[:2000]] if previous_answer else []))
-    n_a, n_p, n_w = len(answer_claims), len(prior), len(windows)
-    claim_vecs, prior_vecs = vectors[:n_a], vectors[n_a:n_a + n_p]
-    window_vecs = vectors[n_a + n_p:n_a + n_p + n_w]
-    question_vec, answer_vec = vectors[n_a + n_p + n_w], vectors[n_a + n_p + n_w + 1]
-    previous_vec = vectors[n_a + n_p + n_w + 2] if previous_answer else None
+    groups = [answer_claims, [c for _, c in prior], sentences, windows, [answer_text], references]
+    vectors = backend.embed([t for g in groups for t in g])
+    split, offset = [], 0
+    for g in groups:
+        split.append(vectors[offset:offset + len(g)])
+        offset += len(g)
+    claim_vecs, prior_vecs, sentence_vecs, window_vecs, (answer_vec,), reference_vecs = split
 
     # Contradictions with earlier answers.
     pairs, meta = [], []
     for ci, vec in enumerate(claim_vecs):
-        for _, pi in _top_related(vec, prior_vecs, PAIRS_PER_CLAIM):
+        for _, pi in _top_related(vec, prior_vecs, PAIRS_PER_CLAIM, gate):
             pairs.append((prior[pi][1], answer_claims[ci]))
             meta.append((ci, pi))
-    for (ci, pi), probs in zip(meta, backend.nli(pairs)):
-        contra = probs.get("contradiction", 0.0)
-        if contra >= 0.5 and contra > probs.get("entailment", 0.0):
-            signals.add("contradiction", contra, claim=answer_claims[ci], evidence=prior[pi][1], turn=prior[pi][0])
+    for (ci, pi), probs in zip(meta, _bidirectional(backend, pairs)):
+        if probs["contradiction"] >= CONTRADICTION_CUT:
+            signals.add("contradiction", probs["contradiction"], claim=answer_claims[ci], evidence=prior[pi][1], turn=prior[pi][0])
 
-    # Support and conflicts with the course excerpts.
-    if windows and answer_claims:
-        pairs, meta = [], []
+    # Support from, and conflicts with, the course excerpts.
+    if excerpts and answer_claims:
+        support_pairs, support_meta = [], []
         for ci, vec in enumerate(claim_vecs):
-            for _, wi in _top_related(vec, window_vecs, PAIRS_PER_CLAIM):
-                pairs.append((windows[wi], answer_claims[ci]))
-                meta.append((ci, wi))
+            for _, wi in _top_related(vec, window_vecs, PAIRS_PER_CLAIM, 0.0):
+                support_pairs.append((windows[wi], answer_claims[ci]))
+                support_meta.append(ci)
+        entailed = {}
+        for ci, probs in zip(support_meta, backend.nli(support_pairs)):
+            entailed[ci] = max(entailed.get(ci, 0.0), probs.get("entailment", 0.0))
+        conflict_pairs, conflict_meta = [], []
+        for ci, vec in enumerate(claim_vecs):
+            if entailed.get(ci, 0.0) >= 0.5:
+                continue
+            for _, si in _top_related(vec, sentence_vecs, PAIRS_PER_CLAIM, gate):
+                conflict_pairs.append((sentences[si], answer_claims[ci]))
+                conflict_meta.append((ci, si))
         best = {}
-        for (ci, wi), probs in zip(meta, backend.nli(pairs)):
-            entail, contra = probs.get("entailment", 0.0), probs.get("contradiction", 0.0)
-            record = best.setdefault(ci, {"entail": 0.0, "contra": 0.0, "window": None})
-            record["entail"] = max(record["entail"], entail)
-            if contra > record["contra"]:
-                record["contra"], record["window"] = contra, windows[wi]
-        supported = 0
-        for ci, record in best.items():
-            if record["entail"] >= 0.5:
-                supported += 1
-            elif record["contra"] >= 0.5:
-                signals.add("course_conflict", record["contra"], claim=answer_claims[ci], evidence=record["window"])
-        signals.supported_fraction = supported / len(answer_claims)
+        for (ci, si), probs in zip(conflict_meta, _bidirectional(backend, conflict_pairs)):
+            if probs["contradiction"] > best.get(ci, (0.0, None))[0]:
+                best[ci] = (probs["contradiction"], sentences[si])
+        for ci, (contra, sentence) in best.items():
+            if contra >= CONTRADICTION_CUT:
+                signals.add("course_conflict", contra, claim=answer_claims[ci], evidence=sentence)
+        signals.supported_fraction = sum(v >= 0.5 for v in entailed.values()) / len(answer_claims)
 
-    # Topic drift.
+    # Topic drift: the answer must relate to at least one reference.
     if answer_text and len(answer_text.split()) >= 5:
-        similarity = _cos(question_vec, answer_vec)
-        if previous_vec is not None:
-            similarity = max(similarity, _cos(previous_vec, answer_vec))
+        similarity = max([_cos(answer_vec, v) for v in reference_vecs] + [_cos(answer_vec, v) for v in window_vecs[:20]])
         if similarity < DRIFT_COSINE:
             signals.add("topic_drift", min(1.0, (DRIFT_COSINE - similarity) / 0.2),
                         evidence=f"answer/question similarity {similarity:.2f}")
