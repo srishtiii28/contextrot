@@ -22,10 +22,21 @@ Answers that the layer replaced (`superseded`), or could not fix (`flagged`), ar
 | Mode | What it does | Cost | Notes |
 |---|---|---|---|
 | `rules` | The original regex baseline | free | Offline demo only. It catches the scripted primary-key, sentence-limit and photosynthesis faults. Do not report it as a detector. |
-| `judge` (v1) | Deterministic instruction rules, then **one** LLM call that judges contradictions with the last `RELIABILITY_HISTORY_TURNS` answers, conflicts with the excerpts, unmeasurable instructions and drift. The output is strict JSON, validated with pydantic. | 1 LLM call per answer | `JUDGE_PROVIDER`/`JUDGE_MODEL` can differ from the tutor's model, which limits self-preference bias. The prompt treats history, excerpts and the answer as data, not instructions. |
+| `judge` (v1) | Deterministic instruction rules, then **one** LLM call that judges contradictions with the last `RELIABILITY_HISTORY_TURNS` answers, conflicts with the excerpts, unmeasurable instructions and drift. The output is strict JSON, validated with pydantic. | 1 LLM call per answer | `JUDGE_PROVIDER`/`JUDGE_MODEL`/`JUDGE_API_KEY` can differ from the tutor's provider, model and key, which limits self-preference bias. The prompt treats history, excerpts and the answer as data, not instructions. |
 | `nli` (v2) | Deterministic instruction rules. An NLI cross-encoder compares claims with claims from earlier answers, and with single excerpt sentences, under two gates. First, both sentences must be about the same thing: MiniLM cosine ≥ `NLI_PAIR_MIN_SIMILARITY`, default 0.70. Second, the model must call the pair a contradiction in **both** directions. A course conflict also needs that no excerpt passage entails the claim. Drift is the answer's MiniLM similarity to the question, the previous answer and the excerpts. | CPU, no LLM call | `pip install -r requirements-nli.txt`. The models load when the worker starts. It cannot check free-form instructions such as "only give hints". |
 
 Every mode runs under `RELIABILITY_TIMEOUT_SECONDS` (10 s target, slide 3). Errors propagate, so the worker marks the answer `check_failed` ("unverified") instead of passing it silently. The client can retry with `POST /sessions/{id}/jobs/{job_id}/retry`.
+
+Temporary provider failures are handled separately from real errors:
+- A rate limit (HTTP 429) re-queues the check for the wait the provider asks for, up to 20 times, without using up the job's 3 attempts. Waits of 2 s or less are absorbed inside the call.
+- One timeout is retried after 2 s.
+- If the provider asks to wait more than 60 s, the check fails visibly instead, because a pending check blocks the student's next question.
+- Rate limits while scoring a correction are waited out inside the job (up to 30 s), so the correction is not regenerated.
+- If the judge's JSON is cut off by the output cap (Groq `json_validate_failed`), the call is retried once with a larger cap.
+
+The judge prompt is budgeted to about 1–2.5k input tokens: the last 4 answers (900 characters each), the top 3 excerpts (1,000 characters each), and the answer (3,500 characters). It asks for at most 3 items per list, with quotes of 25 words or fewer. On the Groq free tier (8k tokens per minute per model) that allows about 4–6 checks a minute per judge key.
+
+`JUDGE_API_KEY` gives the judge its own key, and with it its own rate limit. The tutor's retry receives the alert text, so it knows what to fix. The v2 models run on `NLI_DEVICE=cpu` by default: on a shared GPU, such as Apple MPS next to a local LLM, they ran out of memory.
 
 Measurable instructions are checked by rules in every mode. These are sentence and word limits ("at most 2 sentences", "in two sentences", "3 sentences max", "50 words or less"), bullets and "no bullets", numbered lists, "include an example" and "no code". Limits per item ("2 sentences per bullet") are left to the judge. Sentence counting ignores headings, tables, citations, "e.g."/"i.e." and decimals.
 
