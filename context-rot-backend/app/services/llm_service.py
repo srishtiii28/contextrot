@@ -642,6 +642,7 @@ async def generate_response(
     retrieved_context: list[RetrievedChunk],
     constraints=None,
     recovery: bool = False,
+    recovery_feedback: str | None = None,
     subject: str | None = None,
     image_data: str | None = None,
     in_scope: bool = True,
@@ -746,6 +747,7 @@ async def generate_response(
                 "history": compress_history(conversation_history),
                 "excerpts": [c.model_dump() for c in retrieved_context],
                 "correct_previous_failure": recovery,
+                "previous_failure": recovery_feedback if recovery else None,
             }
         async with httpx.AsyncClient(timeout=settings.model_timeout_seconds) as client:
             response = await client.post(
@@ -800,6 +802,23 @@ async def generate_response(
                     f"Task Guidance: {guidance}\n\n"
                     f"Question: {user_message}"
                 )
+
+        if constraints:
+            # Session constraints are the student's standing instructions: they apply to every answer and
+            # override the default depth/format guidance (unlike transient per-question requests).
+            standing = "\n".join(f"- {c['content']}" for c in constraints if c.get("content"))
+            system_prompt += (
+                "\n\nSTUDENT'S STANDING INSTRUCTIONS FOR THIS SESSION (mandatory for EVERY answer; they override any "
+                "default length, depth or format guidance above, including 'full-length' or 'standard depth'):\n" + standing
+            )
+            user_prompt += "\n\nFollow the student's standing instructions exactly:\n" + standing
+        if recovery:
+            user_prompt += (
+                "\n\nAn automatic reliability check rejected your previous answer to this question"
+                + (f": {recovery_feedback}" if recovery_feedback else ".")
+                + " Write a corrected answer that fixes this, stays consistent with the course excerpts, and follows "
+                "every standing instruction exactly."
+            )
 
         if image_data:
             user_msg_content = [
