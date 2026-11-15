@@ -25,8 +25,15 @@ class Signals:
 
     def add(self, type_, severity, claim=None, evidence=None, turn=None):
         severity = max(0.0, min(1.0, float(severity)))
-        if severity > 0:
-            self.flags.append(Flag(type=type_, severity=round(severity, 4), claim=_clip(claim), evidence=_clip(evidence), turn=turn))
+        if severity <= 0:
+            return
+        flag = Flag(type=type_, severity=round(severity, 4), claim=_clip(claim), evidence=_clip(evidence), turn=turn)
+        for i, existing in enumerate(self.flags):  # one flag per (type, claim): keep the strongest evidence
+            if existing.type == type_ and existing.claim == flag.claim:
+                if flag.severity > existing.severity:
+                    self.flags[i] = flag
+                return
+        self.flags.append(flag)
 
     def strongest(self, type_) -> float:
         return max((f.severity for f in self.flags if f.type == type_), default=0.0)
@@ -58,18 +65,24 @@ def _alert(flags: list[Flag]) -> str | None:
         if not matching:
             continue
         top = matching[0]
-        detail = top.evidence or top.claim
+        detail = (top.evidence or top.claim or "").strip().rstrip(".!?;:")
         if type_ == "contradiction" and top.turn is not None:
-            label += f" (answer {top.turn})"
+            label += " (previous answer)" if top.turn == 1 else f" ({top.turn} answers ago)"
         parts.append(f"{label}: {detail}." if detail else f"{label}.")
     return " ".join(parts) or None
 
 
 def aggregate(signals: Signals, detector: str, flag_at: float = 0.5) -> dict:
-    """Builds the DetectorResult dict. Flags below `flag_at` lower H but do not set the boolean fields."""
+    """Builds the DetectorResult dict. Flags below `flag_at` lower H but do not set the boolean fields.
+
+    The student-facing alert follows the same rule as recovery and evaluation: it is shown only when
+    H < RECOVERY_THRESHOLD, so the measured false-alarm rate is the rate of alerts students see.
+    """
     sev = {k: signals.strongest(k) for k in ALERT_TEXT}
     health = health_from_severities(sev)
-    reported = [f for f in signals.flags if f.severity >= flag_at]
+    reported = []
+    if health < get_settings().recovery_threshold:  # several weak signals can add up: then show them all
+        reported = [f for f in signals.flags if f.severity >= flag_at] or signals.flags
     return DetectorResult(
         topic_score=round(1 - sev["topic_drift"], 4),
         contradiction_score=round(max(sev["contradiction"], sev["course_conflict"]), 4),
