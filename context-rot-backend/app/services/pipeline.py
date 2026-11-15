@@ -30,8 +30,15 @@ async def prepare(db, session_id, payload):
         raise HTTPException(403, "Fault injection is enabled only in explicit offline demo mode")
     if db.scalar(select(Job.id).where(Job.session_id == session_id, Job.status.in_(["queued", "running"]))):
         raise HTTPException(409, "Wait for the previous answer's reliability check to complete")
-    history = [dict(role=m.role, content=m.content) for m in db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))]
+    messages = list(db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id)))
+    # Answers the reliability layer replaced (superseded) or could not fix (flagged) are known to be wrong.
+    # Keeping them would feed the tutor bad context and make correct later answers look contradictory.
+    hidden = set(db.scalars(select(MessageState.message_id).where(
+        MessageState.message_id.in_([m.id for m in messages]), MessageState.status.in_(["superseded", "flagged"])))) if messages else set()
+    history = [dict(role=m.role, content=m.content) for m in messages if m.id not in hidden]
     constraints = [dict(type=c.constraint_type, content=c.content) for c in db.scalars(select(Constraint).where(Constraint.session_id == session_id))]
+    if social_reply(payload):
+        return history, constraints, [], True
     session = db.get(StudySession, session_id)
     kb_id = session.knowledge_base_id if session else None
 
@@ -70,6 +77,32 @@ async def prepare(db, session_id, payload):
 
     retrieved = await retrieve(RetrievalRequest(query=cleaned_query, session_id=session_id, knowledge_base_id=kb_id), db=db)
     return history, constraints, retrieved.chunks, retrieved.in_scope
+
+
+SOCIAL_REPLIES = {
+    "thank": "You're welcome! Ask me anything else from the course whenever you're ready.",
+    "greet": "Hi! What would you like to revise from the course?",
+    "bye": "Good luck with your revision!",
+    "ack": "Great. What would you like to look at next?",
+}
+
+
+def social_reply(payload) -> str | None:
+    """A fixed short reply for "thanks"/"ok"-style messages: no retrieval, no LLM call, no reliability check."""
+    from app.reliability.text import is_social_turn
+    content = (getattr(payload, "content", "") or "").strip()
+    if getattr(payload, "image_data", None) or getattr(payload, "demo_fault", None) or not get_settings().skip_social_turns:
+        return None
+    if not is_social_turn(content):
+        return None
+    lowered = content.lower()
+    if "thank" in lowered or lowered.startswith(("thx", "ty")):
+        return SOCIAL_REPLIES["thank"]
+    if lowered.startswith(("hi", "hello", "hey", "good ")):
+        return SOCIAL_REPLIES["greet"]
+    if lowered.startswith(("bye", "goodbye", "see you")):
+        return SOCIAL_REPLIES["bye"]
+    return SOCIAL_REPLIES["ack"]
 
 
 def inject_fault(answer, fault):

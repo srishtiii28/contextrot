@@ -11,7 +11,7 @@ from app.database.models import User
 from app.routes.dependencies import current_user
 from app.schemas.message import ChatResponse, MessageCreate
 from app.services.llm_service import generate_response, normalize_subject_category
-from app.services.pipeline import inject_fault, persist_answer, prepare
+from app.services.pipeline import inject_fault, persist_answer, prepare, social_reply
 from app.services.session_service import owned_session
 from app.services.submission_lock import acquire, release
 
@@ -25,6 +25,10 @@ async def send_message(session_id: int, payload: MessageCreate, db: Session = De
     lock = acquire(session_id)
     try:
         history, constraints, chunks, in_scope = await prepare(db, session_id, payload)
+        social = social_reply(payload)
+        if social:
+            return persist_answer(db, session_id, payload, social, history, constraints, [],
+                                  (time.perf_counter() - start) * 1000, in_scope=True)
         diagram_sources = []
         user_text = payload.content or "Please solve the question shown in the attached image."
         warning_banner = (
@@ -134,8 +138,12 @@ async def stream_message(session_id: int, payload: MessageCreate, db: Session = 
             return "event: " + kind + "\ndata: " + json.dumps(data) + "\n\n"
 
         answer = ""
+        social = social_reply(payload)
         try:
-            if not in_scope:
+            if social:
+                answer = social
+                yield frame("token", {"text": answer})
+            elif not in_scope:
                 warning_banner = (
                     "> ⚠️ **Out of Syllabus:** This topic is outside your prescribed course material. "
                     "The following answer is provided from general knowledge and is not verified against your syllabus notes.\n\n"
@@ -159,9 +167,9 @@ async def stream_message(session_id: int, payload: MessageCreate, db: Session = 
                 answer,
                 history,
                 constraints,
-                chunks if in_scope else [],
+                chunks if in_scope and not social else [],
                 (time.perf_counter() - start) * 1000,
-                in_scope=in_scope,
+                in_scope=in_scope or bool(social),
             )
             yield frame("saved", ChatResponse(**result).model_dump(mode="json"))
         except Exception:
