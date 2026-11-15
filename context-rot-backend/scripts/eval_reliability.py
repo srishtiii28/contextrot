@@ -3,11 +3,14 @@
   python scripts/eval_reliability.py run      --detector judge --data sessions.jsonl
   python scripts/eval_reliability.py fit      --detector judge [--fit-weights]
   python scripts/eval_reliability.py evaluate --detector judge [--split test]
-  python scripts/eval_reliability.py compare  --v1 judge --v2 nli
+  python scripts/eval_reliability.py compare  --v1 judge --v2 nli [--split dev]
+  python scripts/eval_reliability.py premise  --data premise_sessions.jsonl
+  python scripts/eval_reliability.py recovery --database-url sqlite:///./context_rot.db
 
 `run` caches per-turn scores so `fit` and `evaluate` never call the model again. `fit` uses only the dev
-split. `evaluate --split test` scores the held-out set once with frozen thresholds and refuses to run
-again unless --force (slide 9 validation protocol).
+split and is locked once the held-out set has been scored. `evaluate --split test` scores the held-out set
+once with frozen thresholds fitted on the same data file and refuses to run again unless --force
+(slide 9 validation protocol).
 """
 import argparse
 import asyncio
@@ -50,10 +53,19 @@ def cmd_run(args):
     REPORTS.mkdir(exist_ok=True)
     meta = dict(detector=args.detector, data=str(args.data), data_sha256=evaluation.data_fingerprint(args.data))
     _scores_path(args.detector).write_text("\n".join(json.dumps(dict(r, **meta)) for r in rows) + "\n")
-    print(f"Scored {len(rows)} turns from {len(sessions)} sessions -> {_scores_path(args.detector)}")
+    errors = sum(r.get("health") is None for r in rows)
+    print(f"Scored {len(rows)} turns from {len(sessions)} sessions -> {_scores_path(args.detector)}"
+          + (f" ({errors} detector errors, excluded from metrics)" if errors else ""))
+
+
+def _marker(detector):
+    return REPORTS / f"reliability-heldout-scored-{detector}.json"
 
 
 def cmd_fit(args):
+    if _marker(args.detector).exists() and not args.force:
+        sys.exit(f"The held-out set was already scored with frozen thresholds ({_marker(args.detector)}). "
+                 "Refitting now would tune on knowledge of the test result; use --force only for a documented rerun.")
     rows = _read_rows(args.detector)
     result = evaluation.fit(rows, fit_weights=args.fit_weights)
     result.update(detector=args.detector, fitted_at=datetime.now(UTC).isoformat(),
@@ -71,7 +83,9 @@ def cmd_evaluate(args):
     if not thresholds_path.exists():
         sys.exit(f"{thresholds_path} not found: fit on dev first; thresholds are never fitted on test")
     frozen = json.loads(thresholds_path.read_text())
-    marker = REPORTS / f"reliability-heldout-scored-{args.detector}.json"
+    if frozen.get("data_sha256") != rows[0].get("data_sha256"):
+        sys.exit("The scores and the thresholds come from different data files; rerun `run` and `fit` on the same data")
+    marker = _marker(args.detector)
     if args.split == "test" and marker.exists() and not args.force:
         sys.exit(f"Held-out set already scored ({marker}). It is scored once; use --force only to reproduce that run.")
     result = evaluation.report(evaluation.rescore(rows, frozen["weights"]), frozen["tau"])
@@ -92,13 +106,23 @@ def cmd_compare(args):
     _write_json(REPORTS / f"reliability-compare-{args.split}.json", evaluation.compare(*reports))
 
 
+def cmd_premise(args):
+    _write_json(REPORTS / "premise-study.json", evaluation.premise_study(evaluation.load_sessions(args.data)))
+
+
+def cmd_recovery(args):
+    _write_json(REPORTS / "recovery-rate.json", evaluation.recovery_rate(args.database_url))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("run"); p.add_argument("--detector", required=True, choices=["rules", "judge", "nli"]); p.add_argument("--data", required=True, type=Path); p.set_defaults(func=cmd_run)
-    p = sub.add_parser("fit"); p.add_argument("--detector", required=True); p.add_argument("--fit-weights", action="store_true"); p.set_defaults(func=cmd_fit)
+    p = sub.add_parser("fit"); p.add_argument("--detector", required=True); p.add_argument("--fit-weights", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(func=cmd_fit)
     p = sub.add_parser("evaluate"); p.add_argument("--detector", required=True); p.add_argument("--split", default="test", choices=["dev", "test"]); p.add_argument("--force", action="store_true"); p.set_defaults(func=cmd_evaluate)
-    p = sub.add_parser("compare"); p.add_argument("--v1", default="judge"); p.add_argument("--v2", default="nli"); p.add_argument("--split", default="test", choices=["dev", "test"]); p.set_defaults(func=cmd_compare)
+    p = sub.add_parser("compare"); p.add_argument("--v1", default="judge"); p.add_argument("--v2", default="nli"); p.add_argument("--split", default="dev", choices=["dev", "test"]); p.set_defaults(func=cmd_compare)
+    p = sub.add_parser("premise"); p.add_argument("--data", required=True, type=Path); p.set_defaults(func=cmd_premise)
+    p = sub.add_parser("recovery"); p.add_argument("--database-url", required=True); p.set_defaults(func=cmd_recovery)
     args = parser.parse_args()
     args.func(args)
 

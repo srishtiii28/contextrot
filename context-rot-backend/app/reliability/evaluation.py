@@ -6,7 +6,8 @@ Data: JSONL, one labelled session per line:
       "retrieved_context": [{"text": "...", "source": "notes.pdf", "page": 4}],
       "label": "clean"|"contradiction"|"ignored_instruction"|"course_conflict"|"topic_drift"|"other",
       "injected": false}]}
-Constraints are cumulative: a turn's constraints list is what applies at that turn.
+Constraints are cumulative: a turn's constraints list is what applies at that turn. An optional session
+"model" field (the tutor model that produced the answers) is used by the premise study.
 
 A turn is a positive if its label is not "clean"; the detector flags it if H < tau.
 """
@@ -47,39 +48,66 @@ def data_fingerprint(path) -> str:
 
 
 async def run_detector(sessions: list[dict], detector: str, score_fn=None) -> list[dict]:
-    """Replays each session turn by turn. Returns one row per turn with H and per-type severities."""
+    """Replays each session turn by turn. Returns one row per turn with H, per-type severities and cost.
+
+    History is bounded exactly as in production (pipeline.persist_answer -> compress_history), so measured
+    behaviour matches the live worker. A detector error on one turn is recorded and the run continues.
+    """
+    from app.reliability import judge_client
+    from app.services.llm_service import compress_history
     if score_fn is None:
         from app import reliability
         score_fn = reliability.score
+        if detector == "nli":  # load models up front so loading is not counted as the first turn's latency
+            from app.reliability import nli
+            nli.get_backend()
     rows = []
     for number, session in enumerate(sessions, 1):
         history = []
         for index, turn in enumerate(session["turns"], 1):
             constraints = [c if isinstance(c, dict) else {"type": "instruction", "content": c} for c in turn.get("constraints", [])]
             row = dict(session_id=str(session["session_id"]), split=session["split"], turn=index,
-                       label=turn["label"], injected=bool(turn.get("injected", False)))
-            if is_social_turn(turn["question"]):
-                row.update(skipped=True, health=100.0, severities={}, flags=[], latency_ms=0.0)
+                       label=turn["label"], injected=bool(turn.get("injected", False)), model=session.get("model"))
+            if is_social_turn(turn["question"], turn["answer"]):
+                row.update(skipped=True, health=100.0, severities={}, flags=[], latency_ms=0.0, tokens=0)
             else:
                 payload = AnalysisInput(session_id=number, message_id=index, current_question=turn["question"],
-                                        current_answer=turn["answer"], conversation_history=list(history),
+                                        current_answer=turn["answer"], conversation_history=compress_history(history),
                                         constraints=constraints, retrieved_context=turn.get("retrieved_context", []))
+                usage = {}
+                token = judge_client.USAGE.set(usage)
                 started = time.perf_counter()
-                result = await score_fn(payload, detector)
+                try:
+                    result = await score_fn(payload, detector)
+                except Exception as exc:  # recorded, excluded from metrics, reported as an error count
+                    row.update(skipped=False, error=f"{type(exc).__name__}: {exc}"[:300], health=None, severities={},
+                               flags=[], latency_ms=round((time.perf_counter() - started) * 1000, 2), tokens=0)
+                    rows.append(row)
+                    history += [{"role": "user", "content": turn["question"]}, {"role": "assistant", "content": turn["answer"]}]
+                    continue
+                finally:
+                    judge_client.USAGE.reset(token)
                 severities = {}
                 for flag in result.get("flags") or []:
                     severities[flag["type"]] = max(severities.get(flag["type"], 0.0), flag["severity"])
                 row.update(skipped=False, health=result["health_score"], severities=severities,
                            flags=[f["type"] for f in result.get("flags") or []],
-                           latency_ms=result.get("latency_ms") or round((time.perf_counter() - started) * 1000, 2))
+                           latency_ms=result.get("latency_ms") or round((time.perf_counter() - started) * 1000, 2),
+                           tokens=usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
             rows.append(row)
             history += [{"role": "user", "content": turn["question"]}, {"role": "assistant", "content": turn["answer"]}]
     return rows
 
 
+def scored(rows: list[dict]) -> list[dict]:
+    """Rows with a score (detector errors excluded)."""
+    return [r for r in rows if r.get("health") is not None]
+
+
 def rescore(rows: list[dict], weights: dict[str, float]) -> list[dict]:
     """Recomputes H from stored severities with other weights, without calling the detector again."""
-    return [dict(r, health=100.0 if r.get("skipped") else health_from_severities(r["severities"], weights)) for r in rows]
+    return [dict(r, health=100.0 if r.get("skipped") else health_from_severities(r["severities"], weights))
+            for r in scored(rows)]
 
 
 def _counts(rows, tau):
@@ -146,6 +174,8 @@ def _percentile(values, q):
 
 
 def report(rows, tau, seed=0) -> dict:
+    errors = len(rows) - len(scored(rows))
+    rows = scored(rows)
     negatives = [r for r in rows if r["label"] == "clean"]
     by_origin = {}
     for name, keep in (("injected", True), ("natural", False)):
@@ -157,8 +187,14 @@ def report(rows, tau, seed=0) -> dict:
         positives = [r for r in rows if r["label"] == label]
         recall_by_type[label] = round(sum(r["health"] < tau for r in positives) / len(positives), 4)
     latencies = [r["latency_ms"] for r in rows if not r.get("skipped")]
+    checked = [r for r in rows if not r.get("skipped")]
+    sessions = _sessions(rows)
+    clean_sessions = sum(all(r["label"] == "clean" for r in s) for s in sessions.values())
     return dict(
-        tau=tau, turns=len(rows), sessions=len(_sessions(rows)),
+        tau=tau, turns=len(rows), sessions=len(sessions), clean_sessions=clean_sessions,
+        rot_sessions=len(sessions) - clean_sessions, detector_errors=errors,
+        cost=dict(mean_tokens_per_answer=round(statistics.fmean(r.get("tokens", 0) for r in checked), 1) if checked else None,
+                  mean_latency_ms=round(statistics.fmean(latencies), 2) if latencies else None),
         positives=sum(r["label"] != "clean" for r in rows), skipped=sum(bool(r.get("skipped")) for r in rows),
         **prf(rows, tau), f1_ci95=bootstrap_f1(rows, tau, seed=seed),
         false_alarms_per_clean_session=false_alarms_per_clean_session(rows, tau),
@@ -173,15 +209,18 @@ def report(rows, tau, seed=0) -> dict:
 def fit_threshold(rows, max_false_alarms=MAX_FALSE_ALARMS_PER_SESSION) -> dict:
     """Highest dev F1 whose false alarms stay within budget. When several tau tie, take the middle of the
     tied range rather than an edge, so the threshold is not fitted tight against one dev example."""
-    scored = []
+    rows = scored(rows)
+    if false_alarms_per_clean_session(rows, 100) is None:
+        raise ValueError("No fully clean dev sessions: the false-alarm budget cannot be checked, so tau cannot be fitted")
+    by_tau = []
     for tau in range(1, 101):
         metrics = prf(rows, tau)
         alarms = false_alarms_per_clean_session(rows, tau)
         within = alarms is None or alarms <= max_false_alarms
         key = (within, metrics["f1"] if within else -(alarms or 0))
-        scored.append((key, dict(tau=tau, f1=metrics["f1"], false_alarms_per_clean_session=alarms, constraint_met=within)))
-    best_key = max(key for key, _ in scored)
-    tied = [result for key, result in scored if key == best_key]
+        by_tau.append((key, dict(tau=tau, f1=metrics["f1"], false_alarms_per_clean_session=alarms, constraint_met=within)))
+    best_key = max(key for key, _ in by_tau)
+    tied = [result for key, result in by_tau if key == best_key]
     return tied[len(tied) // 2]
 
 
@@ -203,7 +242,59 @@ def fit(rows, fit_weights=False, grid=(20, 35, 50, 65, 80)) -> dict:
 
 
 def compare(v1: dict, v2: dict, margin=0.05) -> dict:
-    """Slide 8 rule: v2 (local) replaces v1 (judge) only if its held-out F1 is within `margin` of v1's."""
+    """Slide 8 rule: v2 (local) replaces v1 (judge) only if its F1 is within `margin` of v1's at lower cost.
+    Cost is LLM tokens per answer, then latency; both come from the reports' `cost` section."""
     gap = round(v1["f1"] - v2["f1"], 4)
-    return dict(v1_f1=v1["f1"], v2_f1=v2["f1"], gap=gap, margin=margin,
-                decision="replace v1 with v2" if gap <= margin else "keep v1 (judge)")
+    c1, c2 = v1.get("cost") or {}, v2.get("cost") or {}
+    cost_key = lambda c: (c.get("mean_tokens_per_answer") or 0, c.get("mean_latency_ms") or 0)
+    cheaper = cost_key(c2) < cost_key(c1)
+    return dict(v1_f1=v1["f1"], v2_f1=v2["f1"], gap=gap, margin=margin, v1_cost=c1, v2_cost=c2, v2_cheaper=cheaper,
+                decision="replace v1 with v2" if gap <= margin and cheaper else "keep v1")
+
+
+def premise_study(sessions: list[dict], early=(1, 10), late=(21, 30), n=2000, seed=0) -> dict:
+    """Slide 9 premise: do failures rise with turn number? Human labels only, no detector.
+
+    Per tutor model: failure rate in turns 21-30 vs 1-10, and a 95% bootstrap interval for the
+    difference that resamples whole sessions.
+    """
+    def rates(group):
+        def rate(lo, hi):
+            turns = [t for s in group for i, t in enumerate(s["turns"], 1) if lo <= i <= hi]
+            return sum(t["label"] != "clean" for t in turns) / len(turns) if turns else None
+        return rate(*early), rate(*late)
+
+    by_model = {}
+    for session in sessions:
+        by_model.setdefault(session.get("model") or "unknown", []).append(session)
+    rng = random.Random(seed)
+    out = {}
+    for model, group in sorted(by_model.items()):
+        early_rate, late_rate = rates(group)
+        if early_rate is None or late_rate is None:
+            out[model] = dict(sessions=len(group), note=f"needs sessions with at least {late[1]} turns")
+            continue
+        diffs = []
+        for _ in range(n):
+            e, l = rates([rng.choice(group) for _ in group])
+            if e is not None and l is not None:
+                diffs.append(l - e)
+        diffs.sort()
+        ci = [round(diffs[int(0.025 * len(diffs))], 4), round(diffs[min(len(diffs) - 1, int(0.975 * len(diffs)))], 4)] if diffs else None
+        out[model] = dict(sessions=len(group), early_failure_rate=round(early_rate, 4), late_failure_rate=round(late_rate, 4),
+                          difference=round(late_rate - early_rate, 4), difference_ci95=ci,
+                          rises=bool(ci and ci[0] > 0))
+    return out
+
+
+def recovery_rate(database_url: str) -> dict:
+    """Slide 9: share of flagged answers fixed within one retry, from the live database."""
+    from sqlalchemy import create_engine, text
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        counts = dict(connection.execute(text(
+            "SELECT status, COUNT(*) FROM message_states WHERE correction_of IS NOT NULL GROUP BY status")).all())
+    attempted = sum(counts.values())
+    return dict(retries=attempted, corrected=counts.get("corrected", 0), still_flagged=counts.get("flagged", 0),
+                unverified=counts.get("check_failed", 0),
+                recovery_rate=round(counts.get("corrected", 0) / attempted, 4) if attempted else None)
