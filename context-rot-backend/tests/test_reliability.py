@@ -172,6 +172,93 @@ def test_judge_needs_a_real_provider(monkeypatch):
     assert judge_client._parse('```json\n{"off_topic": false}\n```') == {"off_topic": False}
 
 
+def test_judge_uses_its_own_api_key(monkeypatch):
+    import httpx
+    seen = []
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None, json=None):
+            seen.append(headers["Authorization"])
+            return httpx.Response(200, request=httpx.Request("POST", url),
+                                  json={"choices": [{"message": {"content": "{}"}}], "usage": {}})
+    s = get_settings()
+    monkeypatch.setattr(s, "judge_provider", "groq")
+    monkeypatch.setattr(s, "groq_api_key", "tutor-key")
+    monkeypatch.setattr(s, "judge_api_key", "judge-key")
+    monkeypatch.setattr(judge_client.httpx, "AsyncClient", FakeClient)
+    asyncio.run(judge_client.complete_json("s", "u"))
+    monkeypatch.setattr(s, "judge_api_key", None)
+    asyncio.run(judge_client.complete_json("s", "u"))
+    assert seen == ["Bearer judge-key", "Bearer tutor-key"]
+
+
+def test_judge_retries_once_when_json_overflows_and_requeues_on_rate_limit(monkeypatch):
+    import httpx
+    replies, budgets = [], []
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None, json=None):
+            budgets.append(json["max_tokens"])
+            status, body, extra = replies.pop(0)
+            return httpx.Response(status, request=httpx.Request("POST", url), json=body, headers=extra)
+    s = get_settings()
+    monkeypatch.setattr(s, "judge_provider", "groq")
+    monkeypatch.setattr(s, "groq_api_key", "k")
+    monkeypatch.setattr(judge_client.httpx, "AsyncClient", FakeClient)
+    overflow = (400, {"error": {"code": "json_validate_failed", "failed_generation": "max completion tokens reached"}}, {})
+    ok = (200, {"choices": [{"message": {"content": "{}"}}], "usage": {}}, {})
+    replies[:] = [overflow, ok]
+    assert asyncio.run(judge_client.complete_json("s", "u")) == {} and budgets == [700, 1500]
+    replies[:] = [overflow, overflow]
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(judge_client.complete_json("s", "u"))
+    replies[:] = [(429, {}, {"retry-after": "12"})]
+    with pytest.raises(judge_client.RateLimited) as caught:
+        asyncio.run(judge_client.complete_json("s", "u"))
+    assert caught.value.retry_after == 12
+
+
+def test_rate_limited_check_is_requeued_not_failed(client, account, monkeypatch):
+    import app.services.worker as worker
+    from app.database.database import SessionLocal
+    from app.database.runtime_models import Job
+    calls = []
+
+    async def limited(payload):
+        calls.append(1)
+        if len(calls) == 1:
+            raise judge_client.RateLimited(0.0)
+        from app.reliability import rules
+        return rules.score(payload)
+    monkeypatch.setattr(worker, "analyze", limited)
+    sid = session(client, account)
+    reply = send(client, account, sid)
+    drain()
+    with SessionLocal() as db:
+        job = db.get(Job, reply["job_id"])
+        assert job.status == "done" and job.payload["rate_limited"] == 1 and job.attempts == 1
+    assert client.get(f"/sessions/{sid}/history", headers=account).json()[-1]["status"] == "checked"
+
+
+def test_long_rate_limit_fails_visibly_instead_of_blocking(client, account, monkeypatch):
+    import app.services.worker as worker
+
+    async def daily_limit(payload):
+        raise judge_client.RateLimited(504.0)
+    monkeypatch.setattr(worker, "analyze", daily_limit)
+    sid = session(client, account)
+    reply = send(client, account, sid)
+    drain()
+    assert client.get(f"/sessions/{sid}/history", headers=account).json()[-1]["status"] == "check_failed"
+    assert next(j for j in client.get(f"/sessions/{sid}/jobs", headers=account).json() if j["id"] == reply["job_id"])["status"] == "failed"
+
+
 # --- v2 NLI ---------------------------------------------------------------------------------
 
 class FakeNLI:
@@ -401,6 +488,24 @@ def test_failed_check_of_correction_keeps_original_score(client, account, monkey
     history = client.get(f"/sessions/{sid}/history", headers=account).json()
     assert history[1]["status"] == "superseded" and history[2]["status"] == "check_failed"
     assert client.get(f"/sessions/{sid}/analysis", headers=account).json()[0]["health_score"] == 30
+
+
+def test_rate_limited_correction_check_is_waited_out(client, account, monkeypatch):
+    import app.services.worker as worker
+    calls = []
+
+    async def limited_second(payload):
+        calls.append(payload.current_answer)
+        if len(calls) == 2:
+            raise judge_client.RateLimited(0.0)
+        from app.reliability import rules
+        return rules.score(payload)
+    monkeypatch.setattr(worker, "analyze", limited_second)
+    sid = session(client, account)
+    send(client, account, sid, "contradiction")
+    drain()
+    history = client.get(f"/sessions/{sid}/history", headers=account).json()
+    assert len(calls) == 3 and history[2]["status"] == "corrected"
 
 
 def test_worker_survives_model_preload_failure(monkeypatch):
