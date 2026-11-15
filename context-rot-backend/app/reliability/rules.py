@@ -19,7 +19,8 @@ def score(payload: AnalysisInput) -> dict:
         prose = re.sub(r"\[[^\]]*\]", "", payload.current_answer)
         if match and len([s for s in re.split(r"[.!?]+(?:\s|$)", prose) if s.strip()]) > int(match[1]):
             violations.append("sentence limit")
-        if "bullet" in text and not re.search(r"(?m)^\s*[-*] ", payload.current_answer):
+        negated = re.search(r"(?:no|not|never|don'?t|do not|avoid|without)\b(?:\s+\w+){0,2}\s+bullet", text)
+        if "bullet" in text and not negated and not re.search(r"(?m)^\s*[-*] ", payload.current_answer):
             violations.append("bullet format")
     alerts, flags = [], []
     if contradiction:

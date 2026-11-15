@@ -28,45 +28,73 @@ class InstructionCheck:
         return max((v["severity"] for v in self.violations), default=0.0)
 
 
+_NEGATION = r"(?:no|not|never|don'?t|do not|avoid|without|stop)\b(?:\s+\w+){0,2}\s+"
+_PER_ITEM = re.compile(r"\b(?:per|each|every)\s+(?:bullet|point|item|step|part|question|section|paragraph|heading|line)", re.IGNORECASE)
+
+
+def _limit(unit: str, lowered: str) -> int | None:
+    """Upper limit on `unit` (sentence/word) from phrasings like "at most 2 sentences",
+    "in two sentences", "exactly 3 sentences", "3 sentences max", "50 words or less"."""
+    patterns = (
+        _LIMIT + r"\s+" + _NUM + r"\s+" + unit + r"s?\b",
+        r"\b(?:in|exactly|only|just|use|using|keep it to|limit (?:it|yourself|the answer) to)\s+" + _NUM + r"\s+" + unit + r"s?\b",
+        r"\b" + _NUM + r"[- ]" + unit + r"s?\s+(?:or less|or fewer|max(?:imum)?|at most|only|limit)\b",
+        r"\b(?:one|single)[- ]" + unit + r"\b(?:\s+(?:answer|reply|response|summary))?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            return _number(match[1]) if match.groups() and match[1] else 1
+    return None
+
+
 def _check_one(text: str, answer: str) -> tuple[bool, list[dict]]:
     """Returns (was_measurable, violations) for one constraint."""
     lowered = text.lower()
+    if _PER_ITEM.search(lowered):
+        return False, []  # limits per bullet/step need structure-aware checking: left to the judge
     measurable, found = False, []
+    cleaned = clean_answer(answer)
 
-    match = re.search(_LIMIT + r"\s+" + _NUM + r"\s+sentences?", lowered)
-    if match:
+    limit = _limit("sentence", lowered)
+    if limit is not None:
         measurable = True
-        limit, actual = _number(match[1]), len(prose_sentences(answer))
+        actual = len(prose_sentences(answer))
         if actual > limit:
             found.append(dict(constraint=text, evidence=f"{actual} sentences; limit is {limit}",
                               severity=min(1.0, 0.6 + 0.1 * (actual - limit))))
 
-    match = re.search(_LIMIT + r"\s+" + _NUM + r"\s+words?", lowered) or re.search(r"(\d+)\s+words?\s+(?:or less|or fewer|max(?:imum)?)", lowered)
-    if match:
+    limit = _limit("word", lowered)
+    if limit is not None:
         measurable = True
-        limit, actual = _number(match[1]), word_count(answer)
+        actual = word_count(answer)
         # 10% slack: students and graders do not count words exactly.
         if actual > limit * 1.1:
             found.append(dict(constraint=text, evidence=f"{actual} words; limit is {limit}",
                               severity=min(1.0, 0.5 + (actual - limit) / max(limit, 1))))
 
-    cleaned = clean_answer(answer)
-    if re.search(r"\bbullet(?:s|ed)?(?:\s+points?)?\b", lowered) and not re.search(r"\bno bullet", lowered):
+    has_bullets = bool(re.search(r"(?m)^\s*[-*\u2022]\s+\S", cleaned))
+    if re.search(_NEGATION + r"bullet", lowered) or re.search(r"\bbullet\w*(?:\s+\w+)?\s+(?:not|no)\b", lowered):
         measurable = True
-        if not re.search(r"(?m)^\s*[-*•]\s+\S", cleaned):
+        if has_bullets:
+            found.append(dict(constraint=text, evidence="answer uses bullet points", severity=0.8))
+    elif re.search(r"\bbullet(?:s|ed)?(?:\s+points?)?\b", lowered):
+        measurable = True
+        if not has_bullets:
             found.append(dict(constraint=text, evidence="no bullet points in the answer", severity=0.8))
 
-    if re.search(r"\bnumbered (?:list|steps|points)\b|\bstep[- ]by[- ]step numbered\b", lowered):
+    if re.search(r"\bnumbered (?:list|steps|points)\b", lowered) and not re.search(_NEGATION + r"numbered", lowered):
         measurable = True
         if not re.search(r"(?m)^\s*\d+[.)]\s+\S", cleaned):
             found.append(dict(constraint=text, evidence="no numbered list in the answer", severity=0.8))
 
-    if re.search(r"\b(?:include|give|with|use)\s+(?:an?|one|at least one)\s+examples?\b|\balways (?:give|include) examples?\b", lowered):
+    if re.search(r"\b(?:include|give|with|use|add)\s+(?:an?|one|at least one)\s+examples?\b|\balways (?:give|include) examples?\b", lowered) \
+            and not re.search(_NEGATION + r"examples?", lowered):
         measurable = True
         if not re.search(r"\b(?:for example|for instance|e\.g\.|example|such as|consider)\b", cleaned.lower()):
             found.append(dict(constraint=text, evidence="no example in the answer", severity=0.6))
 
-    if re.search(r"\b(?:no|don't use|do not use|avoid|without)\s+(?:any\s+)?(?:code|code blocks?)\b", lowered):
+    if re.search(r"\b(?:no|don'?t use|do not use|avoid|without)\s+(?:any\s+)?(?:code|code blocks?)\b", lowered):
         measurable = True
         if "```" in (answer or ""):
             found.append(dict(constraint=text, evidence="answer contains a code block", severity=0.8))
