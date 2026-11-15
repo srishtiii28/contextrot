@@ -90,6 +90,8 @@ def persist_answer(db, session_id, payload, answer, history, constraints, chunks
     db.add_all([user_message, assistant])
     db.flush()
     sources = [c.model_dump() for c in chunks]
+    from app.reliability.text import is_social_turn
+    skip_check = in_scope and get_settings().skip_social_turns and is_social_turn(payload.content or "")
     scope_warning = (
         "⚠️ This question is outside your course syllabus. The following answer is generated from general AI knowledge."
         if not in_scope
@@ -97,13 +99,13 @@ def persist_answer(db, session_id, payload, answer, history, constraints, chunks
     )
     db.add(MessageState(
         message_id=assistant.id,
-        status="pending" if in_scope else "refused",
+        status="skipped" if skip_check else "pending" if in_scope else "refused",
         sources=sources,
         generation_ms=elapsed_ms,
         scope_warning=scope_warning,
     ))
     job = None
-    if in_scope:
+    if in_scope and not skip_check:
         analysis = AnalysisInput(
             session_id=session_id,
             message_id=assistant.id,

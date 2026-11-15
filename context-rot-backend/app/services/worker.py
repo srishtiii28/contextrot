@@ -84,6 +84,10 @@ async def process_one():
 
 
 async def run_worker():
+    if get_settings().reliability_detector == "nli" and not get_settings().rot_service_url:
+        # Load the NLI models before the first job so model loading does not count against the scoring timeout.
+        from app.reliability import nli
+        await asyncio.to_thread(nli.get_backend)
     while True:
         try:
             worked = await process_one()

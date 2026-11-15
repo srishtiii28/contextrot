@@ -46,7 +46,7 @@ def capabilities():
     s=get_settings()
     return dict(provider=s.llm_provider,model=s.gemini_model if s.llm_provider=="gemini" else "offline-extractive",
         retrieval="teammate HTTP service" if s.rag_service_url else "local lexical demo baseline",
-        detector="teammate HTTP service" if s.rot_service_url else "local rule-based demo baseline (unvalidated)",
+        detector="teammate HTTP service" if s.rot_service_url else {"rules":"local rule-based demo baseline (unvalidated)","judge":"reliability v1: LLM judge","nli":"reliability v2: local NLI"}.get(s.reliability_detector,s.reliability_detector),
         worker="embedded" if s.embedded_worker else "external (start separately)",
         demo_faults=s.enable_demo_faults and s.llm_provider in {"offline","mock"},max_correction_attempts=1,
         scope_policy="refuse when retrieval finds no matching course material")
