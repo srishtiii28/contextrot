@@ -19,8 +19,8 @@ This run is a small local integration benchmark, not proof of production capacit
 | Persisted answer / correction / event flow | Implemented and integration-tested | Repeat with teammate modules and on second laptop |
 | 20-session P95 first content <3s | Passed in the recorded offline run only | Repeat with exact hosted model and final services; report application overhead separately |
 | Score available within 10s | Background workflow implemented; no formal percentile study yet | Measure end-to-end save-to-score time under real load |
-| Rot detection F1 ≥0.80 + confidence interval | Not established | Score the held-out labelled conversations using the validated detector |
-| ≤0.5 false alarms per clean session | Not established | Measure on the clean held-out sessions, including realistic low failure prevalence |
+| Rot detection F1 ≥0.80 + confidence interval | Detectors (v1 judge, v2 NLI) and harness `scripts/eval_reliability.py` implemented and unit-tested; no labelled sessions yet | Run the harness on the 60 labelled sessions: fit on dev, score held-out once |
+| ≤0.5 false alarms per clean session | Harness reports false alarms per 25-turn clean session and precision at 2% prevalence; not yet measured | Measure on the 13 held-out clean sessions |
 | Scope precision ≥0.90 / recall ≥0.70 | Not established | Evaluate Debayush's scope filter on the held-out questions |
 | Retrieval NDCG@5 ≥0.75 | Not established | Integrate vector retrieval, annotate relevance and compare with BM25 |
 | Grounding gain ≥15% | Not established | Blind comparison of the same model with and without retrieval |

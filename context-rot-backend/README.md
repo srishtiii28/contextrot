@@ -31,6 +31,16 @@ The backend supports the complete prototype flow:
 
 Documents are extracted with `pypdf`, split into overlapping chunks, embedded locally, and stored in SQLite / ChromaDB. Retrieval is session-scoped, so one study session cannot use another session's documents.
 
+## Reliability layer
+
+Each in-scope answer is scored in the background worker against the session history, the student's instructions and the retrieved course text. The worker stores a health score H (0–100) and flags with evidence. Set `RELIABILITY_DETECTOR`:
+
+- `rules` (default): the offline demo baseline. It catches only the scripted faults.
+- `judge`: v1, one LLM-judge call per answer. Set `JUDGE_PROVIDER`/`JUDGE_MODEL` to `groq` or `gemini`.
+- `nli`: v2, local NLI and MiniLM checks. Run `pip install -r requirements-nli.txt` first.
+
+Evaluate and fit thresholds with `python scripts/eval_reliability.py`. See [docs/RELIABILITY.md](../docs/RELIABILITY.md).
+
 ## Key endpoints
 
 - `POST /auth/signup`, `POST /auth/login`, `GET /users/me`
