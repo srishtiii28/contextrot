@@ -78,7 +78,7 @@ async def run_detector(sessions: list[dict], detector: str, score_fn=None) -> li
                 token = judge_client.USAGE.set(usage)
                 started = time.perf_counter()
                 try:
-                    result = await score_fn(payload, detector)
+                    result = await _score_with_retries(score_fn, payload, detector)
                 except Exception as exc:  # recorded, excluded from metrics, reported as an error count
                     row.update(skipped=False, error=f"{type(exc).__name__}: {exc}"[:300], health=None, severities={},
                                flags=[], latency_ms=round((time.perf_counter() - started) * 1000, 2), tokens=0)
@@ -97,6 +97,24 @@ async def run_detector(sessions: list[dict], detector: str, score_fn=None) -> li
             rows.append(row)
             history += [{"role": "user", "content": turn["question"]}, {"role": "assistant", "content": turn["answer"]}]
     return rows
+
+
+async def _score_with_retries(score_fn, payload, detector, rate_limit_retries=20, timeout_retries=1):
+    """Like the worker: wait out provider rate limits, retry one timeout; anything else is a real error."""
+    import asyncio
+    while True:
+        try:
+            return await score_fn(payload, detector)
+        except Exception as exc:
+            wait = getattr(exc, "retry_after", None)
+            if wait is not None and rate_limit_retries > 0:
+                rate_limit_retries -= 1
+                await asyncio.sleep(float(wait))
+                continue
+            if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) and timeout_retries > 0:
+                timeout_retries -= 1
+                continue
+            raise
 
 
 def scored(rows: list[dict]) -> list[dict]:
