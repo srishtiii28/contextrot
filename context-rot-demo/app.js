@@ -1184,6 +1184,66 @@ async function loadSessions() {
   showDashboard();
 }
 
+// The server stores UTC timestamps without a zone; read them as UTC, not local time.
+const parseServerDate = (value) => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`);
+const dayKey = (date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+
+async function loadDashboardStats() {
+  const now = new Date();
+  $("dashboard-day").textContent = `${now.toLocaleDateString(undefined, { weekday: "long" })}, keep going`;
+  // Most recent sessions only, to keep the dashboard to a handful of requests.
+  const sessions = [...state.sessions].sort((a, b) => parseServerDate(b.created_at) - parseServerDate(a.created_at)).slice(0, 25);
+  const histories = await Promise.all(sessions.map((s) => request(`/sessions/${s.id}/history`).catch(() => [])));
+  const messages = histories.flat();
+
+  const days = [];
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(now); d.setDate(now.getDate() - i);
+    days.push({ key: dayKey(d), label: d.toLocaleDateString(undefined, { weekday: "short" }), count: 0, today: i === 0 });
+  }
+  const weekStart = new Date(now); weekStart.setDate(now.getDate() - 6); weekStart.setHours(0, 0, 0, 0);
+  let questionsThisWeek = 0;
+  const activeSessions = new Set();
+  histories.forEach((history, index) => history.forEach((m) => {
+    if (m.role !== "user") return;
+    const created = parseServerDate(m.created_at);
+    if (created < weekStart) return;
+    questionsThisWeek += 1;
+    activeSessions.add(sessions[index].id);
+    const day = days.find((d) => d.key === dayKey(created));
+    if (day) day.count += 1;
+  }));
+
+  // First-try outcome of each checked tutor answer: passed (checked) or replaced (superseded).
+  const firstTry = messages.filter((m) => m.role === "assistant" && !m.correction_of && ["checked", "superseded"].includes(m.status));
+  const passed = firstTry.filter((m) => m.status === "checked").length;
+  const corrections = messages.filter((m) => m.correction_of);
+  const fixed = corrections.filter((m) => m.status === "corrected").length;
+  const stillFlagged = corrections.filter((m) => m.status === "flagged").length;
+  const rate = firstTry.length ? Math.round((passed / firstTry.length) * 100) : null;
+
+  $("stat-questions").textContent = questionsThisWeek;
+  $("stat-questions-note").textContent = questionsThisWeek ? `${days.filter((d) => d.count).length} active day${days.filter((d) => d.count).length === 1 ? "" : "s"}` : "";
+  $("stat-sessions").textContent = state.sessions.length;
+  $("stat-sessions-note").textContent = activeSessions.size ? `${activeSessions.size} active this week` : "";
+  $("stat-verified").textContent = rate === null ? "—" : `${rate}%`;
+  $("stat-verified-note").textContent = fixed ? `${fixed} auto-corrected` : "";
+
+  const max = Math.max(1, ...days.map((d) => d.count));
+  $("week-bars").innerHTML = days.map((d) => `<span class="${d.today ? "today" : ""}" style="height:${Math.max(4, Math.round((d.count / max) * 100))}%" title="${d.count} question${d.count === 1 ? "" : "s"}"><i>${d.label}</i></span>`).join("");
+  $("rhythm-note").textContent = questionsThisWeek ? `${questionsThisWeek} question${questionsThisWeek === 1 ? "" : "s"} in the last 7 days.` : "No questions in the last 7 days yet.";
+
+  if (rate === null) return;
+  $("progress-ring").innerHTML = `<b>${rate}<span>%</span></b>`;
+  $("progress-title").textContent = `${passed} of ${firstTry.length} answers passed the reliability check first time.`;
+  const parts = [];
+  if (fixed) parts.push(`${fixed} ${fixed === 1 ? "was" : "were"} corrected automatically`);
+  if (stillFlagged) parts.push(`${stillFlagged} still needed a second look against your notes`);
+  $("progress-text").textContent = parts.length
+    ? `Of the answers that failed, ${parts.join(" and ")}.`
+    : "Every checked answer was consistent with your notes, your instructions and earlier answers.";
+}
+
 function showDashboard() {
   setView("dashboard");
   $("dashboard-view").classList.remove("hidden");
@@ -1192,6 +1252,7 @@ function showDashboard() {
 }
 
 function setView(view) {
+  if (view === "dashboard" || view === "progress") loadDashboardStats().catch(() => {});
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
   $("dashboard-view").classList.toggle("hidden", view !== "dashboard");
   $("session-view").classList.toggle("hidden", view !== "ai");

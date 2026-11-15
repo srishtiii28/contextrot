@@ -87,16 +87,16 @@
             <div id="dashboard-view" class="dashboard-view">
               <div class="dashboard-hero">
                 <div>
-                  <p class="eyebrow">Monday, keep going</p>
+                  <p id="dashboard-day" class="eyebrow">Keep going</p>
                   <h1>Good to see you, <span id="dashboard-name">student</span>!</h1>
                   <p>Build momentum with a focused study session today.</p>
                 </div>
                 <div class="hero-illustration"><span>✦</span><i></i><b></b></div>
               </div>
               <div class="stats-grid">
-                <div class="stat-card"><span class="stat-icon green">◷</span><div><strong>12.5 hrs</strong><small>Study time this week</small></div><em>+18%</em></div>
-                <div class="stat-card"><span class="stat-icon orange">✓</span><div><strong>4 sessions</strong><small>Completed this week</small></div><em>On track</em></div>
-                <div class="stat-card"><span class="stat-icon purple">◈</span><div><strong>82%</strong><small>Learning consistency</small></div><em>Great work</em></div>
+                <div class="stat-card"><span class="stat-icon green">?</span><div><strong id="stat-questions">—</strong><small>Questions asked this week</small></div><em id="stat-questions-note"></em></div>
+                <div class="stat-card"><span class="stat-icon orange">▣</span><div><strong id="stat-sessions">—</strong><small>Study sessions</small></div><em id="stat-sessions-note"></em></div>
+                <div class="stat-card"><span class="stat-icon purple">✓</span><div><strong id="stat-verified">—</strong><small>Answers verified on first try</small></div><em id="stat-verified-note"></em></div>
               </div>
               <div class="dashboard-columns">
                 <div class="card ai-card">
@@ -112,8 +112,8 @@
                 </div>
               </div>
               <div class="card progress-card">
-                <div><div class="section-title"><h2>Your learning rhythm</h2><span class="muted-label">This week</span></div><p>Consistency beats cramming. Keep your study streak moving.</p></div>
-                <div class="week-bars"><span style="height:42%"><i>Mon</i></span><span style="height:70%"><i>Tue</i></span><span style="height:55%"><i>Wed</i></span><span style="height:88%"><i>Thu</i></span><span style="height:66%"><i>Fri</i></span><span style="height:28%"><i>Sat</i></span><span class="today" style="height:76%"><i>Sun</i></span></div>
+                <div><div class="section-title"><h2>Your learning rhythm</h2><span class="muted-label">Last 7 days</span></div><p id="rhythm-note">Questions you asked each day.</p></div>
+                <div id="week-bars" class="week-bars"></div>
               </div>
             </div>
             <div id="empty-state" class="empty-state hidden">
@@ -176,7 +176,7 @@
             </div>
             <div id="sessions-view" class="list-view hidden"><div class="page-heading"><p class="eyebrow">Your library</p><h1>My study sessions</h1><button class="button button-primary" id="list-new-session">＋ New session</button></div><div id="all-sessions" class="all-sessions"></div></div>
             <div id="content-view" class="list-view hidden"><div class="page-heading"><div><p class="eyebrow">Admin content</p><h1>Reference library</h1></div><button class="button button-primary" id="new-library-button">＋ New library</button></div><p class="page-description">Reference materials belong to the platform, not individual students. Create a course library and upload the PDFs that its AI tutor should use.</p><div id="knowledge-base-list" class="library-grid"></div></div>
-            <div id="progress-view" class="progress-view hidden"><div class="page-heading"><p class="eyebrow">Keep growing</p><h1>Your progress</h1></div><div class="card progress-big"><div class="progress-ring">82<span>%</span></div><div><h2>You are building a strong habit.</h2><p>Spend a little time with your notes each day and your understanding compounds. Your AI sessions are helping you stay consistent.</p></div></div></div>
+            <div id="progress-view" class="progress-view hidden"><div class="page-heading"><div><p class="eyebrow">Keep growing</p><h1>Your progress</h1></div></div><div class="card progress-big"><div id="progress-ring" class="progress-ring">—</div><div><h2 id="progress-title">No checked answers yet.</h2><p id="progress-text">Ask questions in a study session. Every answer is checked against your notes, your instructions and earlier answers, and your results show up here.</p></div></div></div>
           </section>
         </section>
       </main>
@@ -214,6 +214,6 @@
       </form>
     </dialog>
     <div id="toast" class="toast" role="status"></div>
-    <script src="app.js?v=2.5"></script>
+    <script src="app.js?v=2.7"></script>
   </body>
 </html>
