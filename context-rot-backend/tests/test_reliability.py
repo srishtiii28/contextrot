@@ -553,3 +553,71 @@ def test_capabilities_name_the_detector(client, monkeypatch):
     assert "NOT CONFIGURED" in client.get("/system/capabilities").json()["detector"]
     monkeypatch.setattr(get_settings(), "reliability_detector", "nli")
     assert "local NLI" in client.get("/system/capabilities").json()["detector"]
+
+
+# --- natural rot: instructions typed in chat, long-range contradictions -------------------------------------
+
+def test_standing_instructions_are_extracted_from_chat():
+    from app.reliability.instructions import cancelled_instructions, standing_instructions
+    assert standing_instructions("For this whole session, answer in at most 2 sentences. What is 2PC?") == ["For this whole session, answer in at most 2 sentences."]
+    assert standing_instructions("From now on use bullet points please.") == ["From now on use bullet points please."]
+    assert standing_instructions("Never use code blocks in your answers.")
+    for one_off in ("Explain 2PC in 2 sentences.", "Can you always explain things simply?", "What is a deadlock?"):
+        assert standing_instructions(one_off) == [], one_off
+    rules = ["End every answer with a line starting 'Exam tip:'.", "Use bullet points."]
+    assert cancelled_instructions("You can stop adding the exam tip lines now.", rules) == [rules[0]]
+
+
+def test_required_last_line_rule_and_sentence_limit_together():
+    rule = [{"content": "For this whole session, answer in at most 2 sentences, and end every answer with a separate line starting 'Exam tip:'."}]
+    ok = "A DDBS is a set of linked databases. It looks like one database.\n**Exam tip:** remember transparency."
+    assert instructions.check_instructions(rule, ok).violations == []  # the tip line does not count as a sentence
+    assert [v["evidence"] for v in instructions.check_instructions(rule, "One. Two. Three.\nExam tip: x").violations] == ["3 sentences; limit is 2"]
+    assert instructions.check_instructions(rule, "One. Two.").violations[0]["evidence"].startswith("last line")
+
+
+def test_chat_instruction_becomes_a_checked_session_instruction(client, account):
+    sid = session(client, account)
+    r = client.post(f"/sessions/{sid}/messages", headers=account,
+                    json={"content": "For this whole session, answer in at most 1 sentence. Explain primary keys."})
+    assert r.status_code == 201
+    assert [c["content"] for c in client.get(f"/sessions/{sid}/constraints", headers=account).json()] == ["For this whole session, answer in at most 1 sentence."]
+    drain()
+    # the offline tutor obeys the stored instruction, so the answer passes the check
+    assert client.get(f"/sessions/{sid}/history", headers=account).json()[1]["status"] == "checked"
+    client.post(f"/sessions/{sid}/messages", headers=account, json={"content": "You no longer need to answer in 1 sentence. Explain primary keys."})
+    assert client.get(f"/sessions/{sid}/constraints", headers=account).json() == []
+
+
+def test_judge_sees_relevant_sentences_from_answers_older_than_the_recent_window():
+    history = [{"role": "user", "content": "Give an EMP example."},
+               {"role": "assistant", "content": "The three EMP fragments are EMP_L with SAL at most 30000, EMP_M with SAL up to 45000 and EMP_H above 45000. Each fragment lives at one site."}]
+    for i in range(6):
+        history += [{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"Timestamp ordering answer number {i} about clocks."}]
+    p = payload("The EMP fragments are split by department into D1, D2 and D3.", question="List the EMP fragments again.", history=history)
+    data = json.loads(judge.build_prompt(p, []).split("\n", 1)[1].rsplit("\n", 1)[0])
+    older = data["EARLIER ANSWERS"][0]
+    assert older["answer"] == 7 and "EMP_L" in older["text"] and "Each fragment lives" not in older["text"]
+    assert [a["answer"] for a in data["EARLIER ANSWERS"][1:]] == [4, 3, 2, 1]  # recent window unchanged
+
+
+def test_conversation_references_are_follow_ups():
+    from app.services.rag_service import is_follow_up_request
+    assert is_follow_up_request("Summarise everything you've told me about two-phase commit in this session.")
+    assert is_follow_up_request("Going back to the EMP example you gave me at the very start: list the fragments.")
+    assert not is_follow_up_request("Summarise the rules of fragmentation.")
+
+
+
+def test_judge_sees_the_answer_the_student_points_back_to():
+    history = [{"role": "user", "content": "Give an EMP fragmentation example."},
+               {"role": "assistant", "content": "We split EMP by salary range. Low-salary employees earn up to 30000. Mid-salary employees earn up to 45000. High-salary employees earn more than 45000."}]
+    for i in range(6):
+        history += [{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"Timestamp ordering answer number {i} about clocks."}]
+    p = payload("The fragments are EMP1 for department D1, EMP2 for D2 and EMP3 for D3.",
+                question="Going back to the EMP example you gave me at the very start: list the fragments again.", history=history)
+    data = json.loads(judge.build_prompt(p, []).split("\n", 1)[1].rsplit("\n", 1)[0])
+    referenced = data["EARLIER ANSWERS"][0]
+    assert referenced["answer"] == 7 and "30000" in referenced["text"] and "45000" in referenced["text"]
+    plain = payload("The fragments are EMP1, EMP2 and EMP3.", question="What is horizontal fragmentation?", history=history)
+    assert all(a["answer"] <= 4 for a in json.loads(judge.build_prompt(plain, []).split("\n", 1)[1].rsplit("\n", 1)[0])["EARLIER ANSWERS"])
