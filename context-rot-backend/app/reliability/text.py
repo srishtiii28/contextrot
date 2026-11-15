@@ -55,7 +55,8 @@ def _content_lines(answer: str):
         if not line.strip() or _STRUCTURAL_LINE.match(line):
             continue  # headings, tables and rules are layout, not sentences
         line = _LIST_MARKER.sub("", line)
-        line = re.sub(r"[*_`]+", "", line).strip()
+        # Strip markdown emphasis and code marks, but keep underscores inside identifiers (EMP_L, σ_{Sal}).
+        line = re.sub(r"[*`]+|(?<!\w)_+|_+(?![\w{])", "", line).strip()
         if line:
             yield line
 
@@ -86,3 +87,23 @@ def prior_assistant_turns(history: list[dict], limit: int) -> list[tuple[int, st
     turns = [(total - i, content) for i, content in enumerate(answers)
              if "out of syllabus" not in content.lower()[:200]]
     return turns[-limit:] if limit > 0 else turns
+
+
+_STOPWORDS = set("""a an the and or but if then so of to in on at by for with from as is are was were be been being it its
+this that these those there their they them he she we you your our i not no can cannot could would should will may might
+must do does did done has have had which who whom what when where why how than into onto over under about also only
+each every any all some more most such same other both either neither very just one two three per via""".split())
+
+
+def content_terms(text: str) -> set[str]:
+    """Lower-cased content words with a light plural fold, for relevance matching."""
+    terms = set()
+    for word in re.findall(r"[a-z0-9][a-z0-9'-]*", (text or "").lower()):
+        if len(word) < 3 or word in _STOPWORDS:
+            continue
+        for suffix in ("ies", "es", "s"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+                word = word[: -len(suffix)] + ("y" if suffix == "ies" else "")
+                break
+        terms.add(word)
+    return terms
