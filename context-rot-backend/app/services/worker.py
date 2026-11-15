@@ -20,9 +20,49 @@ from app.services.pipeline import event, inject_fault
 log = logging.getLogger(__name__)
 
 
+MAX_RATE_LIMIT_REQUEUES = 20
+MAX_REQUEUE_WAIT_SECONDS = 60
+MAX_TIMEOUT_REQUEUES = 1
+
+
+def _transient_wait(exc) -> tuple[float | None, str, int]:
+    """(seconds to wait, counter name, cap) for temporary provider failures; (None, "", 0) otherwise."""
+    import httpx
+    if getattr(exc, "retry_after", None) is not None:
+        return float(exc.retry_after), "rate_limited", MAX_RATE_LIMIT_REQUEUES
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+        from app.reliability.judge_client import rate_limit_wait
+        return rate_limit_wait(exc.response), "rate_limited", MAX_RATE_LIMIT_REQUEUES
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)):
+        return 2.0, "timed_out", MAX_TIMEOUT_REQUEUES
+    return None, "", 0
+
+
+async def _check_correction(payload, max_wait=30.0):
+    """Scores the regenerated answer. Short rate limits and one timeout are waited out here: re-queuing the
+    whole job would regenerate the correction and spend tutor tokens again. Returns None if it cannot be scored,
+    and the correction is then saved as unverified while the original answer keeps its score."""
+    waited, timeouts = 0.0, 0
+    while True:
+        try:
+            return await analyze(payload)
+        except Exception as exc:
+            wait, kind, _ = _transient_wait(exc)
+            if kind == "rate_limited" and waited + wait <= max_wait:
+                waited += wait
+                await asyncio.sleep(wait)
+                continue
+            if kind == "timed_out" and timeouts < MAX_TIMEOUT_REQUEUES:
+                timeouts += 1
+                continue
+            log.warning("Reliability check of correction for message %s failed: %s: %s", payload.message_id, type(exc).__name__, exc)
+            return None
+
+
 def claim_job():
     now, token = time.time(), uuid4().hex
-    eligible = or_(Job.status == "queued", and_(Job.status == "running", Job.lease_until < now))
+    # queued jobs re-queued after a rate limit carry a not-before time in lease_until
+    eligible = or_(and_(Job.status == "queued", Job.lease_until <= now), and_(Job.status == "running", Job.lease_until < now))
     with SessionLocal() as db:
         candidate = db.scalar(select(Job.id).where(eligible).order_by(Job.id).limit(1))
         if candidate is None: return None
@@ -49,13 +89,9 @@ async def process_one():
             retrieval = await retrieve(RetrievalRequest(query=payload.current_question, session_id=payload.session_id))
             sources = [c.model_dump() for c in retrieval.chunks]
             corrected = await generate_response(user_message=payload.current_question, conversation_history=compress_history(payload.conversation_history,3000),
-                retrieved_context=retrieval.chunks, constraints=payload.constraints, recovery=True)
+                retrieved_context=retrieval.chunks, constraints=payload.constraints, recovery=True, recovery_feedback=result.get("alert"))
             if snapshot.get("persistent_fault"): corrected = inject_fault(corrected,"persistent")
-            try:
-                corrected_result = await analyze(payload.model_copy(update={"current_answer":corrected, "retrieved_context":sources}))
-            except Exception as exc:  # keep the original's score; the correction is saved as unverified
-                log.warning("Reliability check of correction for message %s failed: %s: %s", payload.message_id, type(exc).__name__, exc)
-                corrected_result = None
+            corrected_result = await _check_correction(payload.model_copy(update={"current_answer":corrected, "retrieved_context":sources}))
         with SessionLocal() as db:
             # Acquire a write lock and fence stale workers before writing any result.
             locked = db.execute(update(Job).where(Job.id==job_id, Job.claim==token, Job.status=="running").values(status="done", finished_at=datetime.now(UTC)))
@@ -83,6 +119,18 @@ async def process_one():
             db.execute(update(Job).where(Job.id==job_id,Job.claim==token,Job.status=="running").values(status="queued",claim=None,lease_until=0));db.commit()
         raise
     except Exception as exc:
+        wait, kind, cap = _transient_wait(exc)
+        # A pending check blocks the student's next question, so long provider back-offs fail visibly instead
+        # (the answer is marked unverified and can be retried with POST /sessions/{id}/jobs/{job_id}/retry).
+        if wait is not None and wait <= MAX_REQUEUE_WAIT_SECONDS and snapshot.get(kind, 0) < cap:
+            # Rate limits and provider timeouts are temporary: check again shortly instead of marking the answer unverified.
+            log.warning("Reliability job %s %s; re-queued for %.1fs", job_id, kind.replace("_", " "), wait)
+            with SessionLocal() as db:
+                db.execute(update(Job).where(Job.id==job_id,Job.claim==token,Job.status=="running").values(
+                    status="queued",claim=None,lease_until=time.time()+wait,attempts=Job.attempts-1,
+                    payload=dict(snapshot, **{kind: snapshot.get(kind, 0)+1})))
+                db.commit()
+            return True
         log.warning("Reliability job %s failed: %s: %s",job_id,type(exc).__name__,exc)
         with SessionLocal() as db:
             locked=db.execute(update(Job).where(Job.id==job_id,Job.claim==token,Job.status=="running").values(status="failed",error=type(exc).__name__+": check worker/service configuration",finished_at=datetime.now(UTC)))
