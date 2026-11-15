@@ -508,6 +508,33 @@ def test_rate_limited_correction_check_is_waited_out(client, account, monkeypatc
     assert len(calls) == 3 and history[2]["status"] == "corrected"
 
 
+def test_recovery_retrieves_from_the_sessions_own_library(client, account, monkeypatch):
+    import app.services.worker as worker
+    from app.database.database import SessionLocal
+    from app.database.models import Message
+    from app.database.runtime_models import Job, MessageState
+    from app.integrations.rag_client import RetrievalResponse, RetrievedChunk
+    kb = client.post("/knowledge-bases", headers=account, json={"name": "Distributed Databases"}).json()
+    sid = client.post("/sessions", headers=account, json=dict(title="DDB", knowledge_base_id=kb["id"])).json()["id"]
+    with SessionLocal() as db:
+        answer = Message(session_id=sid, role="assistant", content="A primary key can contain NULL values.")
+        db.add(answer); db.flush()
+        db.add(MessageState(message_id=answer.id, status="pending"))
+        db.add(Job(session_id=sid, message_id=answer.id, payload={"analysis": AnalysisInput(
+            session_id=sid, message_id=answer.id, current_question="Explain primary keys.", current_answer=answer.content).model_dump()}))
+        db.commit()
+    seen = []
+
+    async def fake_retrieve(request, db=None):
+        seen.append(request.knowledge_base_id)
+        return RetrievalResponse(in_scope=True, chunks=[RetrievedChunk(text="A primary key cannot contain NULL values.", source="ddb.pdf", page=4, score=1.0)])
+    monkeypatch.setattr(worker, "retrieve", fake_retrieve)
+    drain()
+    assert seen == [kb["id"]]
+    correction = client.get(f"/sessions/{sid}/history", headers=account).json()[-1]
+    assert correction["correction_of"] and correction["sources"][0]["source"] == "ddb.pdf"
+
+
 def test_worker_survives_model_preload_failure(monkeypatch):
     import app.services.worker as worker
     monkeypatch.setattr(get_settings(), "reliability_detector", "nli")

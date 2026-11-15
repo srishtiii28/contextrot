@@ -9,7 +9,7 @@ from uuid import uuid4
 from sqlalchemy import and_, or_, select, update
 from app.core.config import get_settings
 from app.database.database import SessionLocal, create_tables
-from app.database.models import AnalysisResult, Message
+from app.database.models import AnalysisResult, Message, StudySession
 from app.database.runtime_models import Job, MessageState
 from app.integrations.rag_client import RetrievalRequest, retrieve
 from app.integrations.rot_client import analyze
@@ -86,7 +86,12 @@ async def process_one():
         result = await analyze(payload)
         corrected, corrected_result, sources = None, None, []
         if result["health_score"] < get_settings().recovery_threshold:
-            retrieval = await retrieve(RetrievalRequest(query=payload.current_question, session_id=payload.session_id))
+            # Re-retrieve from the session's own course library; without knowledge_base_id, retrieval falls back
+            # to the built-in demo notes and the correction is grounded in the wrong course.
+            with SessionLocal() as db:
+                study_session = db.get(StudySession, payload.session_id)
+                kb_id = study_session.knowledge_base_id if study_session else None
+            retrieval = await retrieve(RetrievalRequest(query=payload.current_question, session_id=payload.session_id, knowledge_base_id=kb_id))
             sources = [c.model_dump() for c in retrieval.chunks]
             corrected = await generate_response(user_message=payload.current_question, conversation_history=compress_history(payload.conversation_history,3000),
                 retrieved_context=retrieval.chunks, constraints=payload.constraints, recovery=True, recovery_feedback=result.get("alert"))
