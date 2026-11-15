@@ -31,6 +31,7 @@ Return ONLY this JSON object:
  "instruction_violations":[{"instruction":"...","evidence":"...","severity":0.9}],
  "off_topic":false,"off_topic_severity":0.0,
  "supported_fraction":1.0}
+Be brief: quote at most 25 words for each claim and evidence, and report at most 3 items per list (the most severe).
 Use empty lists when there is nothing to report. supported_fraction is the share of the answer's factual claims
 that the excerpts support (1.0 if there are no excerpts)."""
 
@@ -68,23 +69,31 @@ def _int(value) -> int | None:
         return None
 
 
+# Prompt budget: one judge call should fit comfortably in a free-tier 8k tokens/minute limit (~2.5k tokens in).
+EARLIER_ANSWERS = 4
+EARLIER_CHARS = 900
+EXCERPTS = 3
+EXCERPT_CHARS = 1000
+ANSWER_CHARS = 3500
+
+
 def build_prompt(payload: AnalysisInput, judge_instructions: list[str]) -> str:
     settings = get_settings()
-    earlier = prior_assistant_turns(payload.conversation_history, settings.reliability_history_turns)
+    earlier = prior_assistant_turns(payload.conversation_history, min(settings.reliability_history_turns, EARLIER_ANSWERS))
     excerpts = [
-        {"source": c.get("source"), "page": c.get("page"), "text": (c.get("text") or "")[:1500]}
-        for c in payload.retrieved_context[:5]
+        {"source": c.get("source"), "page": c.get("page"), "text": " ".join((c.get("text") or "").split())[:EXCERPT_CHARS]}
+        for c in payload.retrieved_context[:EXCERPTS]
     ]
     data = {
-        "EARLIER ANSWERS": [{"answer": n, "text": clean_answer(text)[:1500]} for n, text in earlier],
         # answer numbers count back from the current answer: 1 = the previous answer
+        "EARLIER ANSWERS": [{"answer": n, "text": clean_answer(text)[:EARLIER_CHARS]} for n, text in earlier],
         "COURSE EXCERPTS": excerpts,
         "STUDENT INSTRUCTIONS TO JUDGE": judge_instructions,
         "STUDENT QUESTION": payload.current_question,
-        "CURRENT ANSWER": clean_answer(payload.current_answer)[:4000],
+        "CURRENT ANSWER": clean_answer(payload.current_answer)[:ANSWER_CHARS],
     }
     # Escape "<" so nothing inside the data (e.g. "</data>" in an answer) can close the wrapper.
-    return "<data>\n" + json.dumps(data, ensure_ascii=False, indent=1).replace("<", "\\u003c") + "\n</data>"
+    return "<data>\n" + json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c") + "\n</data>"
 
 
 async def score(payload: AnalysisInput) -> dict:
@@ -99,7 +108,7 @@ async def score(payload: AnalysisInput) -> dict:
         signals.add("ignored_instruction", v["severity"], claim=v["constraint"], evidence=v["evidence"])
     for v in _items(raw, "instruction_violations"):
         signals.add("ignored_instruction", v["severity"], claim=_text(v, "instruction"), evidence=_text(v, "evidence"))
-    shown = {n for n, _ in prior_assistant_turns(payload.conversation_history, get_settings().reliability_history_turns)}
+    shown = {n for n, _ in prior_assistant_turns(payload.conversation_history, min(get_settings().reliability_history_turns, EARLIER_ANSWERS))}
     for c in _items(raw, "contradictions"):
         turn = _int(c.get("earlier_answer"))
         if turn in shown:  # a contradiction must point at an earlier answer the judge was actually shown
