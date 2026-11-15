@@ -58,7 +58,7 @@ def _detector_label(s):
 @router.get("/system/capabilities")
 def capabilities():
     s=get_settings()
-    return dict(provider=s.llm_provider,model=s.gemini_model if s.llm_provider=="gemini" else "offline-extractive",
+    return dict(provider=s.llm_provider,model={"gemini":s.gemini_model,"groq":s.groq_model}.get(s.llm_provider,"offline-extractive"),
         retrieval="teammate HTTP service" if s.rag_service_url else "local lexical demo baseline",
         detector=_detector_label(s),
         worker="embedded" if s.embedded_worker else "external (start separately)",
