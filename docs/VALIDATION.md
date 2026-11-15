@@ -14,7 +14,7 @@ This run is a small local integration benchmark, not proof of production capacit
 
 ## Reliability layer on a real provider — 15 November 2026
 
-Setup: tutor `openai/gpt-oss-120b` and judge `qwen/qwen3.8-27b` on Groq (free tier, separate keys), the 157-page *Distributed Databases (R22CSE3146)* notes ingested as the course (346 chunks), `RELIABILITY_DETECTOR=judge`, 10 s check budget.
+Setup: tutor `openai/gpt-oss-120b` and judge `qwen/qwen3.8-27b` on Groq (free tier; two keys, but in one organisation, so they share its quota), the 157-page *Distributed Databases (R22CSE3146)* notes ingested as the course (346 chunks), `RELIABILITY_DETECTOR=judge`, 10 s check budget.
 
 **Live sessions.** A 13-step revision session (with "at most 3 sentences", a later "use bullet points", follow-ups, "thanks" and an off-syllabus question) and a 14-step adversarial session (with "at most 2 sentences", "only give hints", and the student repeatedly insisting on wrong claims). Results:
 
@@ -35,6 +35,13 @@ Setup: tutor `openai/gpt-oss-120b` and judge `qwen/qwen3.8-27b` on Groq (free ti
 | rules | 1.00 | 0.23 | 0.38 | 0 | <1 ms | free |
 | nli (v2) | 0.57 | 0.31 | 0.40 | 2.78 | 412 ms | free (CPU) |
 | judge (v1) | 1.00 | 1.00 | 1.00 (1.00–1.00) | 0 | 625 ms | ~1,100 tokens |
+
+**A cheaper judge was tried and rejected.** On `gpt-oss-20b`, three changes together cut tokens per check by 30% (1,503 → 1,059) and p95 latency from 3.0 s to 2.0 s:
+- a shorter system prompt
+- sending only the earlier-answer and excerpt sentences that share terms with the answer
+- low reasoning effort
+
+But F1 fell from 1.00 to 0.89 and false alarms rose from 0 to 0.93 per clean session, so the measured configuration was kept. Capacity comes instead from giving the judge a key from a separate Groq account, since quotas are per account and per model.
 
 v2 raises false alarms on real course text and misses most course conflicts. Under the slide-8 rule it does not replace v1. These numbers still need the held-out sessions labelled by Arijit and Amar.
 

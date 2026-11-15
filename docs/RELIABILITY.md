@@ -36,7 +36,7 @@ Temporary provider failures are handled separately from real errors:
 
 The judge prompt is budgeted to about 1–2.5k input tokens: the last 4 answers (900 characters each), the top 3 excerpts (1,000 characters each), and the answer (3,500 characters). It asks for at most 3 items per list, with quotes of 25 words or fewer. On the Groq free tier (8k tokens per minute per model) that allows about 4–6 checks a minute per judge key.
 
-`JUDGE_API_KEY` gives the judge its own key, and with it its own rate limit. The tutor's retry receives the alert text, so it knows what to fix. The v2 models run on `NLI_DEVICE=cpu` by default: on a shared GPU, such as Apple MPS next to a local LLM, they ran out of memory.
+`JUDGE_API_KEY` gives the judge its own key. Groq applies rate limits per organisation and per model, so two keys from the same account share one quota (checked on 15 November). For the judge to have its own quota, its key must come from a separate account, such as a teammate's own Groq account. On the free tier, each account has 8k tokens per minute and 200k tokens per day per model. That is roughly 180 judge checks a day. The tutor's retry receives the alert text, so it knows what to fix. The v2 models run on `NLI_DEVICE=cpu` by default: on a shared GPU, such as Apple MPS next to a local LLM, they ran out of memory.
 
 Measurable instructions are checked by rules in every mode. These are sentence and word limits ("at most 2 sentences", "in two sentences", "3 sentences max", "50 words or less"), bullets and "no bullets", numbered lists, "include an example" and "no code". Limits per item ("2 sentences per bullet") are left to the judge. Sentence counting ignores headings, tables, citations, "e.g."/"i.e." and decimals.
 
