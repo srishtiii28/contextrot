@@ -51,7 +51,11 @@ async def process_one():
             corrected = await generate_response(user_message=payload.current_question, conversation_history=compress_history(payload.conversation_history,3000),
                 retrieved_context=retrieval.chunks, constraints=payload.constraints, recovery=True)
             if snapshot.get("persistent_fault"): corrected = inject_fault(corrected,"persistent")
-            corrected_result = await analyze(payload.model_copy(update={"current_answer":corrected, "retrieved_context":sources}))
+            try:
+                corrected_result = await analyze(payload.model_copy(update={"current_answer":corrected, "retrieved_context":sources}))
+            except Exception as exc:  # keep the original's score; the correction is saved as unverified
+                log.warning("Reliability check of correction for message %s failed: %s: %s", payload.message_id, type(exc).__name__, exc)
+                corrected_result = None
         with SessionLocal() as db:
             # Acquire a write lock and fence stale workers before writing any result.
             locked = db.execute(update(Job).where(Job.id==job_id, Job.claim==token, Job.status=="running").values(status="done", finished_at=datetime.now(UTC)))
@@ -63,17 +67,23 @@ async def process_one():
             if corrected is not None:
                 message = Message(session_id=payload.session_id,role="assistant",content=corrected,agent_type="correction")
                 db.add(message);db.flush()
-                status = "corrected" if corrected_result["health_score"] >= get_settings().recovery_threshold else "flagged"
+                if corrected_result is None:
+                    status = "check_failed"
+                elif corrected_result["health_score"] >= get_settings().recovery_threshold:
+                    status = "corrected"
+                else:
+                    status = "flagged"
                 db.add(MessageState(message_id=message.id,status=status,sources=sources,correction_of=payload.message_id))
-                db.add(AnalysisResult(session_id=payload.session_id,message_id=message.id,**corrected_result))
-                event(db,payload.session_id,"answer.corrected",dict(message_id=message.id,correction_of=payload.message_id,status=status,**corrected_result))
+                if corrected_result is not None:
+                    db.add(AnalysisResult(session_id=payload.session_id,message_id=message.id,**corrected_result))
+                event(db,payload.session_id,"answer.corrected",dict(message_id=message.id,correction_of=payload.message_id,status=status,**(corrected_result or {})))
             db.commit()
     except asyncio.CancelledError:
         with SessionLocal() as db:
             db.execute(update(Job).where(Job.id==job_id,Job.claim==token,Job.status=="running").values(status="queued",claim=None,lease_until=0));db.commit()
         raise
     except Exception as exc:
-        log.warning("Reliability job %s failed: %s",job_id,type(exc).__name__)
+        log.warning("Reliability job %s failed: %s: %s",job_id,type(exc).__name__,exc)
         with SessionLocal() as db:
             locked=db.execute(update(Job).where(Job.id==job_id,Job.claim==token,Job.status=="running").values(status="failed",error=type(exc).__name__+": check worker/service configuration",finished_at=datetime.now(UTC)))
             if locked.rowcount:
@@ -87,7 +97,12 @@ async def run_worker():
     if get_settings().reliability_detector == "nli" and not get_settings().rot_service_url:
         # Load the NLI models before the first job so model loading does not count against the scoring timeout.
         from app.reliability import nli
-        await asyncio.to_thread(nli.get_backend)
+        try:
+            await asyncio.to_thread(nli.get_backend)
+            log.info("Reliability v2 models loaded (%s, %s)", get_settings().nli_model, get_settings().embedding_model)
+        except Exception:
+            # Keep polling: each job will then fail visibly as check_failed instead of hanging in the queue.
+            log.exception("Could not load reliability v2 models; answers will be marked check_failed")
     while True:
         try:
             worked = await process_one()
