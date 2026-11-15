@@ -2,10 +2,24 @@
 a different provider or model (JUDGE_PROVIDER / JUDGE_MODEL), which limits self-preference bias."""
 import asyncio
 import json
+import time
+from contextvars import ContextVar
 
 import httpx
 
 from app.core.config import get_settings
+
+
+# Callers that need cost accounting (the evaluation harness) set a dict here; calls add token usage to it.
+USAGE: ContextVar[dict | None] = ContextVar("judge_usage", default=None)
+
+
+def _record_usage(prompt_tokens, completion_tokens):
+    holder = USAGE.get()
+    if holder is not None:
+        holder["calls"] = holder.get("calls", 0) + 1
+        holder["prompt_tokens"] = holder.get("prompt_tokens", 0) + int(prompt_tokens or 0)
+        holder["completion_tokens"] = holder.get("completion_tokens", 0) + int(completion_tokens or 0)
 
 
 class JudgeConfigurationError(RuntimeError):
@@ -29,34 +43,44 @@ def judge_target() -> tuple[str, str]:
 
 
 def _parse(text: str) -> dict:
+    """First JSON object in the reply; tolerates code fences and text around it."""
     text = (text or "").strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        text = text[text.find("{"):]
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("Judge returned no JSON object")
-    return json.loads(text[start:end + 1])
+    decoder = json.JSONDecoder()
+    index = text.find("{")
+    while index >= 0:
+        try:
+            value, _ = decoder.raw_decode(text, index)
+            if isinstance(value, dict):
+                return value
+        except json.JSONDecodeError:
+            pass
+        index = text.find("{", index + 1)
+    raise ValueError("Judge returned no JSON object")
 
 
 async def complete_json(system: str, user: str) -> dict:
     s = get_settings()
     provider, model = judge_target()
-    timeout = s.model_timeout_seconds
+    # Stay inside the reliability budget: a judge that cannot answer in time fails visibly, it is not retried past it.
+    deadline = time.monotonic() + s.reliability_timeout_seconds
+    timeout = min(s.model_timeout_seconds, s.reliability_timeout_seconds)
     async with httpx.AsyncClient(timeout=timeout) as client:
         if provider == "groq":
             body = {"model": model, "temperature": 0, "max_tokens": 1200, "response_format": {"type": "json_object"},
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-            for attempt in range(3):
+            while True:
                 response = await client.post(f"{s.groq_base_url.rstrip('/')}/chat/completions",
                                              headers={"Authorization": f"Bearer {s.groq_api_key}"}, json=body)
-                if response.status_code == 429 and attempt < 2:
-                    retry_after = response.headers.get("retry-after", "")
-                    wait = float(retry_after) if retry_after.replace(".", "", 1).isdigit() else 2.0
-                    await asyncio.sleep(min(max(wait, 1.0), 6.0))
+                retry_after = response.headers.get("retry-after", "")
+                wait = float(retry_after) if retry_after.replace(".", "", 1).isdigit() else 1.0
+                if response.status_code == 429 and time.monotonic() + wait < deadline - 1:
+                    await asyncio.sleep(wait)
                     continue
                 response.raise_for_status()
-                return _parse(response.json()["choices"][0]["message"]["content"])
+                data = response.json()
+                usage = data.get("usage") or {}
+                _record_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
+                return _parse(data["choices"][0]["message"]["content"])
         response = await client.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             headers={"x-goog-api-key": s.google_api_key},
@@ -64,6 +88,9 @@ async def complete_json(system: str, user: str) -> dict:
                   "contents": [{"role": "user", "parts": [{"text": user}]}],
                   "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}})
         response.raise_for_status()
-        candidates = response.json().get("candidates", [])
+        data = response.json()
+        usage = data.get("usageMetadata") or {}
+        _record_usage(usage.get("promptTokenCount"), usage.get("candidatesTokenCount"))
+        candidates = data.get("candidates", [])
         parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
         return _parse("".join(p.get("text", "") for p in parts))
