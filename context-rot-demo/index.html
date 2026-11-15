@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=2.4" />
+    <link rel="stylesheet" href="styles.css?v=2.5" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
@@ -131,6 +131,9 @@
                   <h1 id="session-title">Untitled session</h1>
                 </div>
                 <div class="session-header-actions">
+                  <div id="health-pill" class="health-pill hidden" title="How consistent this session's answers have been with your notes, your instructions and earlier answers">
+                    <span class="health-label">Session health</span><strong id="health-score">—</strong><small id="health-trend"></small>
+                  </div>
                   <label class="button button-secondary upload-doc-btn" title="Upload PDF to this study session">
                     <span>+ Upload PDF</span>
                     <input type="file" id="session-file-input" accept=".pdf,application/pdf" hidden />
@@ -138,6 +141,16 @@
                 </div>
               </div>
 
+              <div class="instructions-bar">
+                <span class="instructions-label">Your instructions</span>
+                <div id="instruction-list" class="instruction-list"></div>
+                <form id="instruction-form" class="instruction-form hidden">
+                  <input id="instruction-input" maxlength="300" placeholder="e.g. Answer in at most 3 sentences" />
+                  <button class="button button-secondary" type="submit">Add</button>
+                  <button class="text-button" type="button" id="instruction-cancel">Cancel</button>
+                </form>
+                <button id="instruction-add" class="text-button" type="button">+ Add instruction</button>
+              </div>
               <div id="document-strip" class="document-strip"></div>
               <div id="chat-messages" class="chat-messages"></div>
               <div id="image-preview-bar" class="image-preview-bar hidden">
@@ -158,6 +171,7 @@
                 <textarea id="chat-input" rows="1" maxlength="12000" placeholder="Ask anything, or attach a question/diagram screenshot…"></textarea>
                 <button class="send-button" type="submit" aria-label="Send message">↑</button>
               </form>
+              <p id="composer-status" class="composer-status" role="status"></p>
               <p class="composer-hint">Paste screenshots (Ctrl+V) or click 📎 to solve question images. <span>Enter to send · Shift + Enter for new line</span></p>
             </div>
             <div id="sessions-view" class="list-view hidden"><div class="page-heading"><p class="eyebrow">Your library</p><h1>My study sessions</h1><button class="button button-primary" id="list-new-session">＋ New session</button></div><div id="all-sessions" class="all-sessions"></div></div>
@@ -182,6 +196,9 @@
         <label class="field-label">Reference library
           <select id="session-library"></select>
         </label>
+        <label class="field-label">Instructions for every answer <span class="optional">(optional, one per line)</span>
+          <textarea id="session-instructions" rows="2" maxlength="1000" placeholder="e.g. Answer in at most 3 sentences&#10;Use bullet points"></textarea>
+        </label>
         <p id="session-error" class="form-error hidden"></p>
         <button class="button button-primary button-wide" type="submit">Create session <span>→</span></button>
       </form>
@@ -197,6 +214,6 @@
       </form>
     </dialog>
     <div id="toast" class="toast" role="status"></div>
-    <script src="app.js?v=2.4"></script>
+    <script src="app.js?v=2.5"></script>
   </body>
 </html>

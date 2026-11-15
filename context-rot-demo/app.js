@@ -6,6 +6,20 @@ const state = {
   knowledgeBases: [],
   messages: [],
   attachedImage: null,
+  analyses: {},      // message id -> latest reliability analysis
+  jobs: {},          // message id -> reliability job
+  diagrams: {},      // message id -> diagrams returned with the answer
+  constraints: [],
+  pollTimer: null,
+};
+
+// Reliability statuses the backend gives each tutor answer.
+const CHECKING = new Set(["pending"]);
+const FLAG_LABELS = {
+  contradiction: "Contradicts an earlier answer",
+  ignored_instruction: "Ignored your instruction",
+  course_conflict: "Conflicts with your notes",
+  topic_drift: "Drifted off your question",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -79,7 +93,12 @@ function renderKnowledgeBases() {
       const documents = await request(`/knowledge-bases/${item.id}/documents`);
       const target = $(`library-docs-${item.id}`);
       target.textContent = documents.length ? `${documents.length} reference document${documents.length === 1 ? "" : "s"}` : "No documents uploaded yet";
-    } catch (error) { notify(error.message); }
+    } catch (error) {
+      // Platform libraries are listed for everyone but their documents are owner-only (404 for others).
+      const target = $(`library-docs-${item.id}`);
+      if (error.status === 404) target.textContent = "Shared platform library";
+      else notify(error.message);
+    }
   });
 }
 
@@ -137,6 +156,149 @@ function renderDocuments(documents) {
   strip.querySelectorAll(".pill-file-input").forEach((input) => input.addEventListener("change", uploadDocument));
 }
 
+function flagReason(analysis) {
+  const flags = (analysis?.flags || []).filter((f) => f.severity >= 0.5);
+  if (!flags.length) return analysis?.alert || "";
+  const top = flags[0];
+  const detail = top.evidence || top.claim || "";
+  return `${FLAG_LABELS[top.type] || top.type}${detail ? `: ${detail}` : ""}`;
+}
+
+function reliabilitySummary(message) {
+  const reason = flagReason(state.analyses[message.id]);
+  return `<span class="rel-badge rel-replaced">⚠ Replaced</span><span class="rel-reason">${escapeHtml(reason || "This answer failed the reliability check.")}</span>`;
+}
+
+function reliabilityFooter(message) {
+  const analysis = state.analyses[message.id];
+  const score = analysis ? Math.round(analysis.health_score) : null;
+  switch (message.status) {
+    case "pending":
+      return '<div class="reliability"><span class="rel-badge rel-checking"><i class="spinner"></i>Checking against your notes and earlier answers…</span></div>';
+    case "checked":
+    case "corrected": {
+      const extra = score !== null && score < 100 ? `<span class="rel-reason">${escapeHtml(flagReason(analysis))}</span>` : "";
+      return `<div class="reliability"><span class="rel-badge rel-ok" title="Health score: how consistent this answer is with your notes, your instructions and earlier answers">✓ Verified · ${score ?? "—"}</span>${extra}</div>`;
+    }
+    case "flagged": {
+      const reason = (flagReason(analysis) || "The corrected answer also failed the check").replace(/[.!?\s]+$/, "");
+      return `<div class="reliability"><span class="rel-badge rel-flagged">⚠ Still unreliable · ${score ?? "—"}</span><span class="rel-reason">${escapeHtml(reason)}. Double-check this one against your notes.</span></div>`;
+    }
+    case "check_failed": {
+      const job = state.jobs[message.id];
+      const retry = job && job.status === "failed" && job.attempts < 3 ? `<button class="text-button rel-retry" data-retry-job="${job.id}">Retry check</button>` : "";
+      return `<div class="reliability"><span class="rel-badge rel-unverified">Unverified</span><span class="rel-reason">The reliability check could not run for this answer.</span>${retry}</div>`;
+    }
+    case "refused":
+      return '<div class="reliability"><span class="rel-badge rel-unverified">Not checked</span><span class="rel-reason">This question was treated as outside your course notes, so the answer was not checked against them.</span></div>';
+    default:
+      return "";  // skipped: replies to "thanks", "ok" and similar are not checked
+  }
+}
+
+function renderHealth(health) {
+  // /health is "unavailable" while the latest answer is unchecked (pending, refused, check failed);
+  // keep showing the most recent checked score instead of hiding the indicator.
+  const pill = $("health-pill");
+  let current = health?.current_score;
+  if (current === null || current === undefined) {
+    const latest = state.messages.filter((m) => state.analyses[m.id]).pop();
+    current = latest ? state.analyses[latest.id].health_score : null;
+  }
+  pill.classList.toggle("hidden", current === null || current === undefined);
+  if (current === null || current === undefined) return;
+  const score = Math.round(current);
+  $("health-score").textContent = score;
+  $("health-trend").textContent = { improving: "↑ improving", degrading: "↓ dropping", stable: "stable" }[health.trend] || "";
+  pill.classList.toggle("health-low", score < 65);
+}
+
+function renderInstructions() {
+  const list = $("instruction-list");
+  list.innerHTML = state.constraints.length
+    ? state.constraints.map((c) => `<span class="instruction-chip">${escapeHtml(c.content)}</span>`).join("")
+    : '<span class="instruction-empty">None yet. Add one and every answer will be checked against it.</span>';
+}
+
+async function loadConversation(id) {
+  const [history, analyses, jobs, health, constraints] = await Promise.all([
+    request(`/sessions/${id}/history`),
+    request(`/sessions/${id}/analysis`),
+    request(`/sessions/${id}/jobs`),
+    request(`/sessions/${id}/health`),
+    request(`/sessions/${id}/constraints`).catch(() => []),
+  ]);
+  if (id !== state.sessionId) return;
+  state.analyses = {};
+  for (const a of analyses) if (a.message_id) state.analyses[a.message_id] = a;
+  state.jobs = {};
+  for (const j of jobs) state.jobs[j.message_id] = j;
+  state.constraints = constraints;
+  state.messages = history.map((m) => ({
+    id: m.id, role: m.role, content: m.content, image_data: m.image_data, status: m.status,
+    correction_of: m.correction_of, sources: m.role === "assistant" ? m.sources || [] : [], diagrams: state.diagrams[m.id] || [],
+  }));
+  renderMessages();
+  renderHealth(health);
+  renderInstructions();
+  scheduleReliabilityPoll();
+}
+
+function isChecking() {
+  return state.messages.some((m) => CHECKING.has(m.status)) || Object.values(state.jobs).some((j) => j.status === "queued" || j.status === "running");
+}
+
+function scheduleReliabilityPoll() {
+  window.clearTimeout(state.pollTimer);
+  const checking = isChecking();
+  $("chat-form").classList.toggle("composer-waiting", checking);
+  $("composer-status").textContent = checking ? "Checking the last answer before you continue…" : "";
+  if (!checking || !state.sessionId) return;
+  const id = state.sessionId;
+  state.pollTimer = window.setTimeout(() => loadConversation(id).catch(() => scheduleReliabilityPoll()), 1500);
+}
+
+async function retryCheck(jobId) {
+  try {
+    await request(`/sessions/${state.sessionId}/jobs/${jobId}/retry`, { method: "POST" });
+    await loadConversation(state.sessionId);
+  } catch (error) {
+    notify(error.message);
+  }
+}
+
+async function addInstruction(event) {
+  event.preventDefault();
+  const content = $("instruction-input").value.trim();
+  if (!content || !state.sessionId) return;
+  try {
+    await request(`/sessions/${state.sessionId}/constraints`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }),
+    });
+    $("instruction-input").value = "";
+    $("instruction-form").classList.add("hidden");
+    $("instruction-add").classList.remove("hidden");
+    await loadConversation(state.sessionId);
+  } catch (error) {
+    notify(error.message);
+  }
+}
+
+function renderSources(sources) {
+  // One chip per document with its pages, instead of one chip per retrieved chunk.
+  const pages = new Map();
+  for (const source of sources) {
+    if (!pages.has(source.source)) pages.set(source.source, new Set());
+    if (source.page) pages.get(source.source).add(Number(source.page));
+  }
+  const chips = [...pages].map(([name, set]) => {
+    const list = [...set].sort((a, b) => a - b);
+    const label = list.length ? ` · ${list.length > 1 ? "pp." : "p."} ${list.join(", ")}` : "";
+    return `<span class="source">${escapeHtml(name)}${label}</span>`;
+  });
+  return `<div class="sources">${chips.join("")}</div>`;
+}
+
 function renderMessages() {
   const container = $("chat-messages");
   if (!state.messages.length) {
@@ -144,9 +306,7 @@ function renderMessages() {
     return;
   }
   container.innerHTML = state.messages.map((message) => {
-    const sources = message.sources?.length
-      ? `<div class="sources">${message.sources.map((source) => `<span class="source">${escapeHtml(source.source)}${source.page ? ` · p. ${source.page}` : ""}</span>`).join("")}</div>`
-      : "";
+    const sources = message.sources?.length && message.status !== "superseded" ? renderSources(message.sources) : "";
     let diagramsHtml = "";
     if (message.diagrams?.length) {
       diagramsHtml = message.diagrams
@@ -164,7 +324,13 @@ function renderMessages() {
     const content = message.role === "assistant"
       ? renderAssistantContent(message.content)
       : escapeHtml(message.content);
-    return `<article class="message ${message.role}"><div class="message-bubble">${content}${userAttachedHtml}${diagramsHtml}</div>${sources}<div class="message-meta">${message.role === "user" ? "You" : "Context Rot"}</div></article>`;
+    if (message.role === "assistant" && message.status === "superseded") {
+      return `<article class="message assistant superseded"><details class="replaced-answer"><summary>${reliabilitySummary(message)} <span class="show-original">Show original answer</span></summary><div class="message-bubble">${content}${diagramsHtml}</div></details></article>`;
+    }
+    const label = message.correction_of ? '<div class="correction-label">Corrected answer</div>' : "";
+    const meta = message.role === "user" ? "You" : "Context Rot";
+    const reliability = message.role === "assistant" ? reliabilityFooter(message) : "";
+    return `<article class="message ${message.role}${message.correction_of ? " correction" : ""}${message.status === "flagged" ? " flagged" : ""}">${label}<div class="message-bubble">${content}${userAttachedHtml}${diagramsHtml}</div>${sources}${reliability}<div class="message-meta">${meta}</div></article>`;
   }).join("");
 
   if (window.renderMathInElement) {
@@ -1076,12 +1242,7 @@ async function selectSession(id) {
   $("session-subject").textContent = session.subject || "Study session";
   renderSessions();
   try {
-    const [history, documents] = await Promise.all([
-      request(`/sessions/${id}/history`),
-      fetchSessionDocuments(session),
-    ]);
-    state.messages = history.map((message) => ({ role: message.role, content: message.content, image_data: message.image_data }));
-    renderMessages();
+    const [, documents] = await Promise.all([loadConversation(id), fetchSessionDocuments(session)]);
     renderDocuments(documents);
   } catch (error) {
     notify(error.message);
@@ -1126,7 +1287,12 @@ async function createSession(event) {
     const session = await request("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: $("session-name").value.trim(), subject: $("session-subject-input").value.trim() || null, knowledge_base_id: Number($("session-library").value) || null }),
+      body: JSON.stringify({
+        title: $("session-name").value.trim(),
+        subject: $("session-subject-input").value.trim() || null,
+        knowledge_base_id: Number($("session-library").value) || null,
+        constraints: $("session-instructions").value.split("\n").map((line) => line.trim()).filter(Boolean),
+      }),
     });
     $("session-dialog").close();
     $("session-form").reset();
@@ -1245,6 +1411,10 @@ async function sendMessage(event) {
   const imageData = state.attachedImage;
   if (!content && !imageData) return;
   if (!state.sessionId) return;
+  if (isChecking()) {
+    notify("Hang on, the last answer is still being checked.");
+    return;
+  }
   input.value = "";
   input.style.height = "auto";
   const userMsgText = content || "Please solve the question shown in the attached image.";
@@ -1257,13 +1427,17 @@ async function sendMessage(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: userMsgText, image_data: imageData }),
     });
+    state.diagrams[response.assistant_message.id] = response.diagrams || [];
     state.messages.push({
+      id: response.assistant_message.id,
       role: "assistant",
       content: response.assistant_message.content,
+      status: response.assistant_message.status,
       sources: response.sources || [],
       diagrams: response.diagrams || [],
     });
     renderMessages();
+    await loadConversation(state.sessionId);
   } catch (error) {
     state.messages.pop();
     renderMessages();
@@ -1308,6 +1482,20 @@ $("session-library").addEventListener("change", (e) => {
 });
 $("session-form").addEventListener("submit", createSession);
 $("chat-form").addEventListener("submit", sendMessage);
+$("instruction-form").addEventListener("submit", addInstruction);
+$("instruction-add").addEventListener("click", () => {
+  $("instruction-form").classList.remove("hidden");
+  $("instruction-add").classList.add("hidden");
+  $("instruction-input").focus();
+});
+$("instruction-cancel").addEventListener("click", () => {
+  $("instruction-form").classList.add("hidden");
+  $("instruction-add").classList.remove("hidden");
+});
+$("chat-messages").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-retry-job]");
+  if (button) retryCheck(Number(button.dataset.retryJob));
+});
 $("attach-image-button")?.addEventListener("click", () => $("image-attachment-input")?.click());
 $("image-attachment-input")?.addEventListener("change", (e) => {
   const file = e.target.files?.[0];
